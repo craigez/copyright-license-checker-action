@@ -544,6 +544,78 @@ class TestMainEntryPoint(LicenseFileTestCase):
                         main.main()
             self.assertEqual(license_cls.call_args[0][2], ["GPL-2.0-only", "MIT"])
 
+    def test_proprietary_mode_skips_get_license(self):
+        """
+        Proprietary repos are expected to have no LICENSE file; get_license()'s
+        scan (and its misleading "Found license file" / "Using default
+        license" logging) must not run in this mode.
+        """
+        with (
+            mock_patch("main.get_license") as get_license_mock,
+            mock_patch("main.Patch"),
+            mock_patch("main.CopyrightChecker") as copyright_cls,
+            mock_patch("main.LicenseChecker") as license_cls,
+        ):
+            license_cls.return_value.run.return_value = ({}, {})
+            copyright_cls.return_value.run.return_value = {}
+            with mock_patch.object(
+                sys, "argv", ["main.py", "pr.patch", "org/repo", "--mode", "proprietary"]
+            ):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        main.main()
+            get_license_mock.assert_not_called()
+
+    def test_proprietary_mode_passes_canonical_permissive_list(self):
+        """
+        Proprietary mode passes the canonical PERMISSIVE_LICENSES to
+        LicenseChecker, not a repo-derived list (Finding 1).
+        """
+        with (
+            mock_patch("main.get_license"),
+            mock_patch("main.Patch"),
+            mock_patch("main.CopyrightChecker") as copyright_cls,
+            mock_patch("main.LicenseChecker") as license_cls,
+        ):
+            license_cls.return_value.run.return_value = ({}, {})
+            copyright_cls.return_value.run.return_value = {}
+            with mock_patch.object(
+                sys, "argv", ["main.py", "pr.patch", "org/repo", "--mode", "proprietary"]
+            ):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        main.main()
+            self.assertEqual(license_cls.call_args[0][2], main.PERMISSIVE_LICENSES)
+            self.assertEqual(license_cls.call_args.kwargs["mode"], "proprietary")
+
+    def test_proprietary_entities_are_resolved_and_passed_through(self):
+        """A --proprietary-entities value is resolved and passed to LicenseChecker."""
+        with (
+            mock_patch("main.get_license"),
+            mock_patch("main.Patch"),
+            mock_patch("main.CopyrightChecker") as copyright_cls,
+            mock_patch("main.LicenseChecker") as license_cls,
+        ):
+            license_cls.return_value.run.return_value = ({}, {})
+            copyright_cls.return_value.run.return_value = {}
+            argv = [
+                "main.py",
+                "pr.patch",
+                "org/repo",
+                "--mode",
+                "proprietary",
+                "--proprietary-entities",
+                "Acme Robotics",
+            ]
+            with mock_patch.object(sys, "argv", argv):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        main.main()
+            self.assertEqual(
+                license_cls.call_args.kwargs["proprietary_entities"],
+                main.DEFAULT_INTERNAL_ENTITIES + ["Acme Robotics"],
+            )
+
 
 class TestLicenseListsAreDisjoint(unittest.TestCase):
     """Sanity checks on the module-level license constants."""

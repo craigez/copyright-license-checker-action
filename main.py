@@ -7,36 +7,10 @@ import subprocess
 import tempfile
 from scanner import config
 from scanner.patch import Patch
-from scanner.license_scancode import LicenseChecker
+from scanner.license_scancode import LicenseChecker, PERMISSIVE_LICENSES
 from scanner.copyright_checker import CopyrightChecker, DEFAULT_INTERNAL_ENTITIES
 
 LOG_PREFIX = "< file license/copyright check >"
-
-# Define a dictionary of permissive licenses
-PERMISSIVE_LICENSES = [
-    "BSD-3-Clause",
-    "MIT",
-    "Apache-1.0",
-    "Apache-1.1",
-    "Apache-2.0",
-    "BSD-3-Clause-Clear",
-    "FreeBSD-DOC",
-    "Zlib",
-    "BSD-1-Clause",
-    "BSD-2-Clause",
-    "BSD-2-Clause-first-lines",
-    "BSD-2-Clause-Views",
-    "BSD-3-Clause-Sun",
-    "BSD-4-Clause-Shortened",
-    "BSD-3-Clause-Attribution",
-    "BSD-4-Clause",
-    "ISC",
-    "CC0-1.0",
-    "ICU",
-    "LicenseRef-scancode-unicode",
-    "Apache-2.0 WITH LLVM-exception",
-    "Apache-2.0 WITH LLVM-exception AND Apache-2.0 AND LLVM-exception",
-]
 
 COPYLEFT_LICENSES = [
     "GPL-1.0-only",
@@ -394,24 +368,33 @@ def main() -> None:  # noqa: C901
     patch = Patch(args.patch_file)
     repo_name = args.repo_name
     internal_entities = resolve_internal_entities(args.proprietary_entities)
-    repo_license = get_license(repo_name)
-    if repo_license in PERMISSIVE_LICENSES:
-        allowed_licenses = PERMISSIVE_LICENSES
-    elif repo_license in COPYLEFT_LICENSES:
-        allowed_licenses = COPYLEFT_LICENSES
-    else:
-        # Handle complex license expressions (e.g., "GPL-2.0-only AND GPL-2.0-or-later")
-        # Parse the expression and include all component licenses
-        allowed_licenses = []
-        for part in repo_license.replace("(", "").replace(")", "").split(" AND "):
-            for lic in part.split(" OR "):
-                lic = lic.strip()
-                if lic:
-                    allowed_licenses.append(lic)
 
-        # If no licenses were parsed, use the original license
-        if not allowed_licenses:
-            allowed_licenses = [repo_license]
+    if args.mode == "proprietary":
+        # Proprietary repos are expected to have no LICENSE file; scanning for
+        # one only produces misleading "Found license file" / "Using default
+        # license" log noise. Permissiveness in this mode is judged against
+        # the canonical list directly (see LicenseChecker.run()).
+        repo_license = "proprietary"
+        allowed_licenses = PERMISSIVE_LICENSES
+    else:
+        repo_license = get_license(repo_name)
+        if repo_license in PERMISSIVE_LICENSES:
+            allowed_licenses = PERMISSIVE_LICENSES
+        elif repo_license in COPYLEFT_LICENSES:
+            allowed_licenses = COPYLEFT_LICENSES
+        else:
+            # Handle complex license expressions (e.g., "GPL-2.0-only AND GPL-2.0-or-later")
+            # Parse the expression and include all component licenses
+            allowed_licenses = []
+            for part in repo_license.replace("(", "").replace(")", "").split(" AND "):
+                for lic in part.split(" OR "):
+                    lic = lic.strip()
+                    if lic:
+                        allowed_licenses.append(lic)
+
+            # If no licenses were parsed, use the original license
+            if not allowed_licenses:
+                allowed_licenses = [repo_license]
 
     license_checker = LicenseChecker(
         patch, repo_name, allowed_licenses, mode=args.mode, proprietary_entities=internal_entities
