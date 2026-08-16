@@ -199,6 +199,22 @@ class TestIsUncertainLicenseIssue(unittest.TestCase):
         )
 
 
+class TestParseArgs(unittest.TestCase):
+    """parse_args resolves the CLI surface backing the action's inputs."""
+
+    def test_positional_args_are_required(self):
+        """patch_file and repo_name are required positionals."""
+        args = main.parse_args(["pr.patch", "org/repo"])
+        self.assertEqual(args.patch_file, "pr.patch")
+        self.assertEqual(args.repo_name, "org/repo")
+
+    def test_missing_positional_exits(self):
+        """Omitting a required positional fails fast."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                main.parse_args(["pr.patch"])
+
+
 class TestBeautifyOutput(unittest.TestCase):
     """
     beautify_output is a pure rendering concern: it prints the report and
