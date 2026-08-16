@@ -9,6 +9,7 @@ import warnings
 import os
 from pathlib import Path
 
+from scanner.copyright_checker import DEFAULT_INTERNAL_ENTITIES
 from scanner.patch import Patch
 
 warnings.filterwarnings("ignore", message="Libmagic magic database not found")
@@ -19,7 +20,14 @@ class LicenseChecker:
     Class to check for licenses in a patch file.
     """
 
-    def __init__(self, patch: Patch, repo: str, permissive_licenses: list) -> None:
+    def __init__(
+        self,
+        patch: Patch,
+        repo: str,
+        permissive_licenses: list,
+        mode: str = "opensource",
+        proprietary_entities: list | None = None,
+    ) -> None:
         """
         Initialize the LicenseChecker object.
 
@@ -27,10 +35,20 @@ class LicenseChecker:
             patch (Patch): The patch file to check.
             repo (str): The repository name.
             permissive_licenses (list): A list of permissive licenses.
+            mode (str): "opensource" (default) or "proprietary". In
+                "opensource" mode, run() behavior is unchanged from before
+                mode support existed.
+            proprietary_entities (list): Copyright-holder substrings treated
+                as internal authorship in proprietary mode. Defaults to
+                scanner.copyright_checker.DEFAULT_INTERNAL_ENTITIES when None.
         """
         self.patch = patch
         self.repo = repo
         self.permissive_licenses = permissive_licenses
+        self.mode = mode
+        self.proprietary_entities = (
+            proprietary_entities if proprietary_entities is not None else DEFAULT_INTERNAL_ENTITIES
+        )
 
     # TODO: exceeds team max-complexity=10, branch count, and nesting depth
     # (SPDX expression evaluation covers AND/OR grouping plus GPL "-or-later"

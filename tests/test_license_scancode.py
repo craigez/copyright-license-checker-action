@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch as mock_patch
 
+from scanner.copyright_checker import DEFAULT_INTERNAL_ENTITIES
 from scanner.license_scancode import LicenseChecker
 
 PERMISSIVE = [
@@ -196,6 +197,36 @@ class TestIsSourceFile(unittest.TestCase):
         """Other extensions are not source files."""
         for name in ("a.txt", "a.cfg", "a.png", "Makefile"):
             self.assertFalse(self.checker.is_source_file(name), name)
+
+
+class TestLicenseCheckerModePlumbing(unittest.TestCase):
+    """
+    Constructor defaults for mode/proprietary_entities. run()'s behavior does
+    not yet branch on mode -- that lands in a later commit -- so this only
+    covers the plumbing itself.
+    """
+
+    def test_mode_defaults_to_opensource(self):
+        """With no mode argument, the checker defaults to opensource."""
+        checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
+        self.assertEqual(checker.mode, "opensource")
+
+    def test_proprietary_entities_defaults_to_module_default(self):
+        """With no proprietary_entities argument, the module default is used."""
+        checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
+        self.assertEqual(checker.proprietary_entities, DEFAULT_INTERNAL_ENTITIES)
+
+    def test_mode_and_entities_are_stored_when_provided(self):
+        """Explicit mode/proprietary_entities arguments are stored as given."""
+        checker = LicenseChecker(
+            make_patch_obj([]),
+            "org/repo",
+            PERMISSIVE,
+            mode="proprietary",
+            proprietary_entities=["Acme Robotics"],
+        )
+        self.assertEqual(checker.mode, "proprietary")
+        self.assertEqual(checker.proprietary_entities, ["Acme Robotics"])
 
 
 class TestDetectLicensesBatch(ScancodeMockMixin, unittest.TestCase):

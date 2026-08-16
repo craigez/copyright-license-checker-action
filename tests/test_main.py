@@ -208,11 +208,71 @@ class TestParseArgs(unittest.TestCase):
         self.assertEqual(args.patch_file, "pr.patch")
         self.assertEqual(args.repo_name, "org/repo")
 
+    def test_mode_defaults_to_opensource(self):
+        """With no --mode flag, mode defaults to opensource."""
+        args = main.parse_args(["pr.patch", "org/repo"])
+        self.assertEqual(args.mode, "opensource")
+
+    def test_mode_accepts_proprietary(self):
+        """--mode proprietary is accepted."""
+        args = main.parse_args(["pr.patch", "org/repo", "--mode", "proprietary"])
+        self.assertEqual(args.mode, "proprietary")
+
+    def test_invalid_mode_exits(self):
+        """An unrecognized --mode value fails fast rather than being silently accepted."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                main.parse_args(["pr.patch", "org/repo", "--mode", "bogus"])
+
+    def test_proprietary_entities_defaults_to_empty_string(self):
+        """With no flag, proprietary_entities defaults to an empty string."""
+        args = main.parse_args(["pr.patch", "org/repo"])
+        self.assertEqual(args.proprietary_entities, "")
+
+    def test_proprietary_entities_is_captured(self):
+        """--proprietary-entities is captured verbatim for later parsing."""
+        args = main.parse_args(
+            ["pr.patch", "org/repo", "--proprietary-entities", "Acme Robotics,Other Co"]
+        )
+        self.assertEqual(args.proprietary_entities, "Acme Robotics,Other Co")
+
     def test_missing_positional_exits(self):
         """Omitting a required positional fails fast."""
         with contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 main.parse_args(["pr.patch"])
+
+
+class TestResolveInternalEntities(unittest.TestCase):
+    """resolve_internal_entities builds the entity list passed to LicenseChecker."""
+
+    def test_empty_string_returns_only_defaults(self):
+        """An empty proprietary_entities value returns just the built-in defaults."""
+        self.assertEqual(main.resolve_internal_entities(""), main.DEFAULT_INTERNAL_ENTITIES)
+
+    def test_extra_entities_are_appended(self):
+        """
+        User-supplied entities are appended after the defaults. Entity names
+        must not contain commas, since that is the field separator.
+        """
+        result = main.resolve_internal_entities("Acme Robotics,Other Co")
+        self.assertEqual(result, main.DEFAULT_INTERNAL_ENTITIES + ["Acme Robotics", "Other Co"])
+
+    def test_whitespace_around_entries_is_stripped(self):
+        """Surrounding whitespace on each comma-separated entry is stripped."""
+        result = main.resolve_internal_entities("  Acme Robotics , Other Co  ")
+        self.assertEqual(result, main.DEFAULT_INTERNAL_ENTITIES + ["Acme Robotics", "Other Co"])
+
+    def test_blank_entries_are_dropped(self):
+        """A trailing comma or blank entry does not produce an empty string entity."""
+        result = main.resolve_internal_entities("Acme Robotics,,")
+        self.assertEqual(result, main.DEFAULT_INTERNAL_ENTITIES + ["Acme Robotics"])
+
+    def test_does_not_mutate_the_default_list(self):
+        """The returned list is a new object; DEFAULT_INTERNAL_ENTITIES is untouched."""
+        original = list(main.DEFAULT_INTERNAL_ENTITIES)
+        main.resolve_internal_entities("Acme Robotics")
+        self.assertEqual(main.DEFAULT_INTERNAL_ENTITIES, original)
 
 
 class TestBeautifyOutput(unittest.TestCase):

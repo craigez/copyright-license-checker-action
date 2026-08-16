@@ -8,7 +8,7 @@ import tempfile
 from scanner import config
 from scanner.patch import Patch
 from scanner.license_scancode import LicenseChecker
-from scanner.copyright_checker import CopyrightChecker
+from scanner.copyright_checker import CopyrightChecker, DEFAULT_INTERNAL_ENTITIES
 
 LOG_PREFIX = "< file license/copyright check >"
 
@@ -335,16 +335,48 @@ def parse_args(argv: list) -> argparse.Namespace:
         argv: Argument list, excluding the program name (i.e. sys.argv[1:]).
 
     Returns:
-        Parsed arguments with patch_file and repo_name attributes.
+        Parsed arguments with patch_file, repo_name, mode, and
+        proprietary_entities attributes.
 
     Raises:
-        SystemExit: If a required positional argument is missing (argparse's
-            own fail-fast behavior).
+        SystemExit: If mode is not one of "opensource"/"proprietary", or
+            required positional arguments are missing (argparse's own
+            fail-fast behavior).
     """
     parser = argparse.ArgumentParser(description="Copyright and license compliance checker.")
     parser.add_argument("patch_file", help="Path to the patch file to check.")
     parser.add_argument("repo_name", help="The name of the GitHub repository.")
+    parser.add_argument(
+        "--mode",
+        choices=("opensource", "proprietary"),
+        default="opensource",
+        help="Compliance mode (default: opensource).",
+    )
+    parser.add_argument(
+        "--proprietary-entities",
+        default="",
+        help=(
+            "Comma-separated copyright-holder strings, in addition to the "
+            "built-in defaults, treated as internal authorship in "
+            "proprietary mode."
+        ),
+    )
     return parser.parse_args(argv)
+
+
+def resolve_internal_entities(proprietary_entities: str) -> list:
+    """
+    Resolve the internal-entity list from a comma-separated argument.
+
+    Args:
+        proprietary_entities: Comma-separated extra entity strings, or "".
+
+    Returns:
+        DEFAULT_INTERNAL_ENTITIES extended with any user-supplied entries.
+        Blank entries (from trailing commas or an empty string) are dropped.
+    """
+    extra = [entity.strip() for entity in proprietary_entities.split(",") if entity.strip()]
+    return DEFAULT_INTERNAL_ENTITIES + extra
 
 
 # TODO: exceeds team max-complexity=10, branch count, and local-variable count
@@ -361,6 +393,7 @@ def main() -> None:  # noqa: C901
     args = parse_args(sys.argv[1:])
     patch = Patch(args.patch_file)
     repo_name = args.repo_name
+    internal_entities = resolve_internal_entities(args.proprietary_entities)
     repo_license = get_license(repo_name)
     if repo_license in PERMISSIVE_LICENSES:
         allowed_licenses = PERMISSIVE_LICENSES
@@ -380,7 +413,9 @@ def main() -> None:  # noqa: C901
         if not allowed_licenses:
             allowed_licenses = [repo_license]
 
-    license_checker = LicenseChecker(patch, repo_name, allowed_licenses)
+    license_checker = LicenseChecker(
+        patch, repo_name, allowed_licenses, mode=args.mode, proprietary_entities=internal_entities
+    )
     copyright_checker = CopyrightChecker(patch)
 
     flagged_license_files, checker_warning_files = license_checker.run()
