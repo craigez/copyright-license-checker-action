@@ -361,12 +361,15 @@ def main() -> None:  # noqa: C901
     license_checker = LicenseChecker(patch, repo_name, allowed_licenses)
     copyright_checker = CopyrightChecker(patch)
 
-    flagged_license_files = license_checker.run()
+    flagged_license_files, checker_warning_files = license_checker.run()
     flagged_copyright_files = copyright_checker.run()
 
     # Combine flagged files and their issues, separating errors from warnings
     flagged_files = {}  # Blocking errors
     warning_files = {}  # Non-blocking warnings
+
+    for file, issues in checker_warning_files.items():
+        warning_files[file] = {"license_issues": list(issues), "copyright_issues": []}
 
     for file, issues in flagged_license_files.items():
         # Separate uncertain license issues (warnings) from real errors
@@ -376,7 +379,10 @@ def main() -> None:  # noqa: C901
         if error_issues:
             flagged_files[file] = {"license_issues": error_issues, "copyright_issues": []}
         if warning_issues:
-            warning_files[file] = {"license_issues": warning_issues, "copyright_issues": []}
+            if file in warning_files:
+                warning_files[file]["license_issues"].extend(warning_issues)
+            else:
+                warning_files[file] = {"license_issues": warning_issues, "copyright_issues": []}
 
     for file, issues in flagged_copyright_files.items():
         if file in flagged_files:

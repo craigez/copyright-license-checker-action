@@ -239,18 +239,24 @@ class LicenseChecker:
     # TODO: exceeds team max-complexity=10 (rule branches mirror the blocking
     # scenarios documented in COMPLIANCE.md; proprietary mode will add further
     # branches here, so revisit extraction once that work has landed).
-    def run(self) -> dict:  # noqa: C901
+    def run(self) -> tuple:  # noqa: C901
         """
         Run the license checker.
 
         Returns:
-            dict: A dictionary of flagged files.
+            tuple: A (flagged_files, warning_files) pair. flagged_files maps
+                path -> list of blocking issue strings; warning_files maps
+                path -> list of non-blocking issue strings. warning_files is
+                currently always empty here — callers still classify severity
+                from flagged_files themselves — but proprietary mode will
+                populate it directly for issues it downgrades to a warning.
         """
         source_files = [change for change in self.patch.changes if change["file_type"] == "source"]
 
         flagged_files = {}
+        warning_files = {}
         if not source_files:
-            return flagged_files
+            return flagged_files, warning_files
 
         license_results = self.detect_licenses_batch(source_files)
 
@@ -283,4 +289,4 @@ class LicenseChecker:
                     issues.append(f"No license added for source file: {change['path_name']}")
                     if issues:
                         flagged_files[change["path_name"]] = issues
-        return flagged_files
+        return flagged_files, warning_files

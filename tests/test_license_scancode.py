@@ -238,11 +238,14 @@ class TestRunLicenseRules(ScancodeMockMixin, unittest.TestCase):
             allowed: Allowed license list; defaults to the permissive set.
 
         Returns:
-            The flagged-files dictionary.
+            The flagged-files dictionary (the warning half of the returned
+            tuple is not exercised by these tests, which cover opensource-mode
+            behavior only).
         """
         self.install_scancode_mock(detections)
         checker = LicenseChecker(make_patch_obj(changes), "org/repo", allowed or PERMISSIVE)
-        return checker.run()
+        flagged, _warnings = checker.run()
+        return flagged
 
     def test_incompatible_license_added_is_flagged(self):
         """Adding a copyleft license to a permissive repo is flagged."""
@@ -301,7 +304,21 @@ class TestRunLicenseRules(ScancodeMockMixin, unittest.TestCase):
     def test_no_source_files_returns_empty(self):
         """With no source changes, run() short-circuits."""
         checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
-        self.assertEqual(checker.run(), {})
+        self.assertEqual(checker.run(), ({}, {}))
+
+    def test_run_returns_a_flagged_warning_tuple(self):
+        """
+        run() returns (flagged_files, warning_files). In opensource mode
+        warning_files is always empty -- proprietary mode is expected to
+        populate it directly for issues it downgrades to a warning.
+        """
+        self.install_scancode_mock({"0_added.txt": "GPL-2.0-only"})
+        checker = LicenseChecker(
+            make_patch_obj([make_change("+GPL text\n")]), "org/repo", PERMISSIVE
+        )
+        flagged, warnings = checker.run()
+        self.assertIn("src/foo.c", flagged)
+        self.assertEqual(warnings, {})
 
 
 class TestRunChangeTypeCoverageGaps(ScancodeMockMixin, unittest.TestCase):
@@ -319,7 +336,7 @@ class TestRunChangeTypeCoverageGaps(ScancodeMockMixin, unittest.TestCase):
             "org/repo",
             PERMISSIVE,
         )
-        self.assertEqual(checker.run(), {})
+        self.assertEqual(checker.run(), ({}, {}))
 
     def test_renamed_change_type_is_not_license_checked(self):
         """RENAMED changes are not license-checked."""
@@ -329,7 +346,7 @@ class TestRunChangeTypeCoverageGaps(ScancodeMockMixin, unittest.TestCase):
             "org/repo",
             PERMISSIVE,
         )
-        self.assertEqual(checker.run(), {})
+        self.assertEqual(checker.run(), ({}, {}))
 
 
 class TestLicenseComparisonFix(ScancodeMockMixin, unittest.TestCase):
@@ -349,7 +366,7 @@ class TestLicenseComparisonFix(ScancodeMockMixin, unittest.TestCase):
             "org/repo",
             PERMISSIVE,
         )
-        flagged = checker.run()
+        flagged, _warnings = checker.run()
         self.assertIn("License deleted: MIT and license added: TIM", flagged["src/foo.c"][0])
 
 

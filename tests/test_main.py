@@ -278,21 +278,30 @@ class TestMainEntryPoint(LicenseFileTestCase):
     list, run both checkers and route issues into blocking vs. warning buckets.
     """
 
-    def run_main(self, argv: list, license_issues: dict, copyright_issues: dict):
+    def run_main(
+        self,
+        argv: list,
+        license_issues: dict,
+        copyright_issues: dict,
+        license_warning_issues: dict = None,
+    ):
         """
         Run main() with both checkers stubbed out.
 
         Args:
             argv: Replacement sys.argv.
-            license_issues: Return value for LicenseChecker.run().
+            license_issues: Blocking half of LicenseChecker.run()'s return tuple.
             copyright_issues: Return value for CopyrightChecker.run().
+            license_warning_issues: Warning half of LicenseChecker.run()'s
+                return tuple; defaults to empty (opensource mode never
+                populates it directly today).
 
         Returns:
             Tuple of (captured stdout, exit code).
         """
         buffer = io.StringIO()
         license_checker = MagicMock()
-        license_checker.run.return_value = license_issues
+        license_checker.run.return_value = (license_issues, license_warning_issues or {})
         copyright_checker = MagicMock()
         copyright_checker.run.return_value = copyright_issues
 
@@ -334,6 +343,38 @@ class TestMainEntryPoint(LicenseFileTestCase):
         )
         self.assertEqual(code, 0)
         self.assertIn("W A R N I N G S", output)
+
+    def test_checker_supplied_warning_is_rendered(self):
+        """
+        A warning returned directly in LicenseChecker.run()'s warning half
+        (as proprietary mode will produce) is rendered without blocking the
+        build, exercising the path distinct from is_uncertain_license_issue.
+        """
+        output, code = self.run_main(
+            ["main.py", "pr.patch", "org/repo"],
+            {},
+            {},
+            license_warning_issues={"src/a.c": ["Permissive open-source license added: MIT"]},
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("W A R N I N G S", output)
+        self.assertIn("Permissive open-source license added: MIT", output)
+
+    def test_checker_warning_and_classified_warning_merge_on_same_file(self):
+        """
+        When a file has both a checker-supplied warning and a separately
+        classified uncertain-license warning, both are preserved rather than
+        one overwriting the other.
+        """
+        output, code = self.run_main(
+            ["main.py", "pr.patch", "org/repo"],
+            {"src/a.c": ["Incompatible license added: LicenseRef-scancode-unknown"]},
+            {},
+            license_warning_issues={"src/a.c": ["Permissive open-source license added: MIT"]},
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Permissive open-source license added: MIT", output)
+        self.assertIn("Incompatible license added: LicenseRef-scancode-unknown", output)
 
     def test_copyright_issue_blocks(self):
         """A copyright deletion is always a blocking issue."""
@@ -387,7 +428,7 @@ class TestMainEntryPoint(LicenseFileTestCase):
             mock_patch("main.CopyrightChecker") as copyright_cls,
             mock_patch("main.LicenseChecker") as license_cls,
         ):
-            license_cls.return_value.run.return_value = {}
+            license_cls.return_value.run.return_value = ({}, {})
             copyright_cls.return_value.run.return_value = {}
             with mock_patch.object(sys, "argv", ["main.py", "pr.patch", "org/repo"]):
                 with contextlib.redirect_stdout(io.StringIO()):
@@ -403,7 +444,7 @@ class TestMainEntryPoint(LicenseFileTestCase):
             mock_patch("main.CopyrightChecker") as copyright_cls,
             mock_patch("main.LicenseChecker") as license_cls,
         ):
-            license_cls.return_value.run.return_value = {}
+            license_cls.return_value.run.return_value = ({}, {})
             copyright_cls.return_value.run.return_value = {}
             with mock_patch.object(sys, "argv", ["main.py", "pr.patch", "org/repo"]):
                 with contextlib.redirect_stdout(io.StringIO()):
@@ -419,7 +460,7 @@ class TestMainEntryPoint(LicenseFileTestCase):
             mock_patch("main.CopyrightChecker") as copyright_cls,
             mock_patch("main.LicenseChecker") as license_cls,
         ):
-            license_cls.return_value.run.return_value = {}
+            license_cls.return_value.run.return_value = ({}, {})
             copyright_cls.return_value.run.return_value = {}
             with mock_patch.object(sys, "argv", ["main.py", "pr.patch", "org/repo"]):
                 with contextlib.redirect_stdout(io.StringIO()):
