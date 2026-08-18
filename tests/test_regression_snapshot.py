@@ -16,10 +16,10 @@ the generic uncertain-license rule). Severity is now decided once, at
 creation time, inside LicenseChecker.run() -- see
 TestProprietaryModeScenarios.test_pm1_proprietary_removal_blocks below.
 
-BUG-2: sys.exit(len(flagged_files)) truncates to 0 at exactly 256 flagged
-files (POSIX exit statuses are 8-bit). See
-TestBug2ExitCodeTruncation.test_256_flagged_files_currently_masks_to_exit_zero
-below -- Step 2 is expected to flip its masked exit code from 0 to 1.
+BUG-2 (fixed): sys.exit(len(flagged_files)) truncated to 0 at exactly 256
+flagged files (POSIX exit statuses are 8-bit). main() now exits 1 for any
+blocking issue regardless of file count -- see
+TestBug2ExitCodeTruncation.test_256_flagged_files_exits_nonzero below.
 """
 
 import contextlib
@@ -305,21 +305,21 @@ class TestProprietaryModeScenarios(RegressionSnapshotTestCase):
 
 class TestBug2ExitCodeTruncation(RegressionSnapshotTestCase):
     """
-    BUG-2: sys.exit(len(flagged_files)) hands the OS a POSIX exit status,
-    which is truncated to 8 bits -- 256, 512, ... all become 0 (a passing
-    build). Deliberately not asserted as a full literal snapshot: the report
-    text for 256 files is enormous and each file's block is identical except
-    for its path, so the value-add of pinning it byte-for-byte is low next to
-    the cost of a 20KB string literal. Structural assertions (exit code,
-    section header, per-file block count) capture the same regression risk.
+    BUG-2 (fixed): sys.exit(len(flagged_files)) used to hand the OS a POSIX
+    exit status, which is truncated to 8 bits -- 256, 512, ... all became 0
+    (a passing build). main() now exits 1 for any blocking issue regardless
+    of file count. Deliberately not asserted as a full literal snapshot: the
+    report text for 256 files is enormous and each file's block is identical
+    except for its path, so the value-add of pinning it byte-for-byte is low
+    next to the cost of a 20KB string literal. Structural assertions (exit
+    code, section header, per-file block count) capture the same regression
+    risk.
     """
 
-    def test_256_flagged_files_currently_masks_to_exit_zero(self):
+    def test_256_flagged_files_exits_nonzero(self):
         """
-        256 distinct blocking issues -> sys.exit(256), which the OS's 8-bit
-        exit status masks to 0 (a passing build). Step 2 is expected to
-        change this to sys.exit(1) regardless of the flagged-file count, so
-        the masked value flips from 0 to 1.
+        256 distinct blocking issues -> sys.exit(1), regardless of the
+        flagged-file count, so the OS-level exit status is never masked to 0.
         """
         file_count = 256
         diff_parts = []
@@ -337,10 +337,7 @@ index 1234567..89abcde 100644
 
         output, code = self.run_main("".join(diff_parts), detections)
 
-        self.assertEqual(code, file_count)
-        self.assertEqual(
-            code & 0xFF, 0, "BUG-2: the OS-level exit status for 256 flagged files is 0"
-        )
+        self.assertEqual(code, 1)
         self.assertIn("B L O C K I N G   E R R O R S", output)
         self.assertEqual(output.count("F I L E:"), file_count)
         for idx in range(file_count):
