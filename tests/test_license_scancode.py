@@ -374,9 +374,9 @@ class TestRunLicenseRules(ScancodeMockMixin, unittest.TestCase):
 
     def test_run_returns_a_flagged_warning_tuple(self):
         """
-        run() returns (flagged_files, warning_files). In opensource mode
-        warning_files is always empty -- proprietary mode is expected to
-        populate it directly for issues it downgrades to a warning.
+        run() returns (flagged_files, warning_files). A known incompatible
+        license like GPL-2.0-only is never classified as uncertain, so it
+        lands in flagged_files and warning_files stays empty.
         """
         self.install_scancode_mock({"0_added.txt": "GPL-2.0-only"})
         checker = LicenseChecker(
