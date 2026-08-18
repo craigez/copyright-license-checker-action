@@ -1,18 +1,25 @@
 """
-End-to-end regression harness for the COMPLIANCE.md scenarios.
+Step 0 regression harness (see CODE_REVIEW.md).
 
-Snapshots main()'s stdout and exit code byte-for-byte -- exercising the real
-Patch, LicenseChecker and CopyrightChecker, with only the scancode subprocess
-mocked -- for one fixture patch per documented scenario. The unit tests
-alongside this file cover the pieces in isolation; this covers what a
-reviewer actually sees in the PR check, so a refactor that quietly reworders
-a report, drops a section, or flips a blocking error into a warning fails
-here even when every unit test still passes.
+Snapshots main()'s end-to-end stdout + exit code -- exercising the real
+Patch, LicenseChecker and CopyrightChecker, with only the scancode
+subprocess mocked -- for one fixture patch per COMPLIANCE.md scenario, in
+whichever mode(s) apply. This pins CURRENT behavior, including two known
+bugs, as a baseline: Steps 1 and 2 of the refactor plan are only safe if
+their fix is the *only* diff against these snapshots, so every other
+scenario here must keep matching byte-for-byte through those steps.
 
-Scope is mode: opensource, the behavior this branch implements. The same
-eight snapshots hold byte-for-byte on the proprietary-mode branch, which is
-the point of pinning them here first: they are the baseline that shows
-adding a second mode leaves the default path untouched.
+BUG-1 (fixed): the proprietary-removal message was misclassified as a
+warning instead of a blocking error by main.is_uncertain_license_issue()'s
+string-parsing catch-all (it contains "LicenseRef-scancode-", so it matched
+the generic uncertain-license rule). Severity is now decided once, at
+creation time, inside LicenseChecker.run() -- see
+TestProprietaryModeScenarios.test_pm1_proprietary_removal_blocks below.
+
+BUG-2: sys.exit(len(flagged_files)) truncates to 0 at exactly 256 flagged
+files (POSIX exit statuses are 8-bit). See
+TestBug2ExitCodeTruncation.test_256_flagged_files_currently_masks_to_exit_zero
+below -- Step 2 is expected to flip its masked exit code from 0 to 1.
 """
 
 import contextlib
@@ -64,9 +71,10 @@ def install_scancode_mock(detections: dict):
 class RegressionSnapshotTestCase(unittest.TestCase):
     """
     Runs main() end-to-end (real Patch/LicenseChecker/CopyrightChecker, only
-    scancode mocked) in a scratch directory with no LICENSE file, so each
-    scenario exercises get_license()'s real default-fallback path against
-    repo_name "org/repo" (which matches no scanner/config.py entry).
+    scancode mocked) in a scratch directory with no LICENSE file, so
+    opensource-mode scenarios exercise get_license()'s real default-fallback
+    path against repo_name "org/repo" (which matches no scanner/config.py
+    entry).
     """
 
     def setUp(self):
@@ -78,13 +86,21 @@ class RegressionSnapshotTestCase(unittest.TestCase):
         os.chdir(self.tmp.name)
         self.addCleanup(os.chdir, original_cwd)
 
-    def run_main(self, patch_content: str, detections: dict) -> tuple:
+    def run_main(
+        self,
+        patch_content: str,
+        detections: dict,
+        mode: str = None,
+        proprietary_entities: str = None,
+    ) -> tuple:
         """
         Write the patch to disk and run main() end-to-end.
 
         Args:
             patch_content: Raw patch text.
             detections: Scancode filename -> SPDX expression (or None) mapping.
+            mode: Optional --mode value.
+            proprietary_entities: Optional --proprietary-entities value.
 
         Returns:
             Tuple of (captured stdout, exit code).
@@ -93,6 +109,10 @@ class RegressionSnapshotTestCase(unittest.TestCase):
         patch_path.write_text(patch_content, encoding="utf-8")
 
         argv = ["main.py", str(patch_path), "org/repo"]
+        if mode:
+            argv += ["--mode", mode]
+        if proprietary_entities:
+            argv += ["--proprietary-entities", proprietary_entities]
 
         buffer = io.StringIO()
         with install_scancode_mock(detections):
@@ -127,9 +147,34 @@ EXPECTED_OS6B_MIXED_UNCERTAIN_AND_GPL_BLOCKS_CODE = 1
 EXPECTED_OS7_SOLE_PROPRIETARY_BLOCKS_OPENSOURCE = "< file license/copyright check > License file not found or detection failed, checking config...\n< file license/copyright check > Using default license: BSD-3-Clause-Clear\n< file license/copyright check > ┌───────────────────────────────────────────┐\n< file license/copyright check > │           **Flagged Files Report**         │\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ 📖 For more information, see: COMPLIANCE.md\n< file license/copyright check > │    https://github.com/qualcomm/copyright-license-checker-action/blob/main/COMPLIANCE.md\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │ 🚨  B L O C K I N G   E R R O R S\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │\n< file license/copyright check > │ ┌─ 📄 F I L E: src/module.c\n< file license/copyright check > │ │\n< file license/copyright check > │ ├─ 🚨 LICENSE ISSUES:\n< file license/copyright check > │ │  • Incompatible license added: LicenseRef-scancode-proprietary-license\n< file license/copyright check > │ └─────────────────────────────────────────\n< file license/copyright check > └───────────────────────────────────────────┘\n"  # noqa: E501
 EXPECTED_OS7_SOLE_PROPRIETARY_BLOCKS_OPENSOURCE_CODE = 1
 
+EXPECTED_PM1_PROPRIETARY_REMOVAL_BLOCKS = "< file license/copyright check > ┌───────────────────────────────────────────┐\n< file license/copyright check > │           **Flagged Files Report**         │\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ 📖 For more information, see: COMPLIANCE.md\n< file license/copyright check > │    https://github.com/qualcomm/copyright-license-checker-action/blob/main/COMPLIANCE.md\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │ 🚨  B L O C K I N G   E R R O R S\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │\n< file license/copyright check > │ ┌─ 📄 F I L E: src/utils.py\n< file license/copyright check > │ │\n< file license/copyright check > │ ├─ 🚨 LICENSE ISSUES:\n< file license/copyright check > │ │  • Proprietary license statement removed: LicenseRef-scancode-proprietary-license -- removing a proprietary rights statement requires review; restore it, or route the change to the scan team/legal if the file's status has genuinely changed.\n< file license/copyright check > │ └─────────────────────────────────────────\n< file license/copyright check > └───────────────────────────────────────────┘\n"  # noqa: E501
+EXPECTED_PM1_PROPRIETARY_REMOVAL_BLOCKS_CODE = 1
+
+EXPECTED_PM2_PERMISSIVE_ADDITION_WARNS = "< file license/copyright check > ┌───────────────────────────────────────────┐\n< file license/copyright check > │           **Flagged Files Report**         │\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ 📖 For more information, see: COMPLIANCE.md\n< file license/copyright check > │    https://github.com/qualcomm/copyright-license-checker-action/blob/main/COMPLIANCE.md\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │ ⚠️   W A R N I N G S  (Non-blocking)\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │\n< file license/copyright check > │ ┌─ 📄 F I L E: src/module.c\n< file license/copyright check > │ │\n< file license/copyright check > │ ├─ ⚠️  LICENSE WARNINGS:\n< file license/copyright check > │ │  • Permissive open-source license added: MIT -- review that this third-party code is approved for inclusion, and update the repo's NOTICE file with the required attribution.\n< file license/copyright check > │ └─────────────────────────────────────────\n< file license/copyright check > └───────────────────────────────────────────┘\n"  # noqa: E501
+EXPECTED_PM2_PERMISSIVE_ADDITION_WARNS_CODE = 0
+
+EXPECTED_PM3_SOLE_PROPRIETARY_SILENT = (
+    "< file license/copyright check > ✅ No license or copyright issues detected\n"
+)
+EXPECTED_PM3_SOLE_PROPRIETARY_SILENT_CODE = 0
+
+EXPECTED_PM4A_INTERNAL_COPYRIGHT_NO_LICENSE_NOT_BLOCKED = (
+    "< file license/copyright check > ✅ No license or copyright issues detected\n"
+)
+EXPECTED_PM4A_INTERNAL_COPYRIGHT_NO_LICENSE_NOT_BLOCKED_CODE = 0
+
+EXPECTED_PM4B_NO_LICENSE_NO_COPYRIGHT_BLOCKS_DISTINCTLY = "< file license/copyright check > ┌───────────────────────────────────────────┐\n< file license/copyright check > │           **Flagged Files Report**         │\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ 📖 For more information, see: COMPLIANCE.md\n< file license/copyright check > │    https://github.com/qualcomm/copyright-license-checker-action/blob/main/COMPLIANCE.md\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │ 🚨  B L O C K I N G   E R R O R S\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │\n< file license/copyright check > │ ┌─ 📄 F I L E: src/new_module.c\n< file license/copyright check > │ │\n< file license/copyright check > │ ├─ 🚨 LICENSE ISSUES:\n< file license/copyright check > │ │  • No license or internal copyright found for source file: src/new_module.c -- if this is third-party code, do NOT add a Qualcomm copyright; route it to the scan team/legal for review. If this is Qualcomm-authored code, add the appropriate copyright marking.\n< file license/copyright check > │ └─────────────────────────────────────────\n< file license/copyright check > └───────────────────────────────────────────┘\n"  # noqa: E501
+EXPECTED_PM4B_NO_LICENSE_NO_COPYRIGHT_BLOCKS_DISTINCTLY_CODE = 1
+
+EXPECTED_PM5_COPYLEFT_STILL_BLOCKS = "< file license/copyright check > ┌───────────────────────────────────────────┐\n< file license/copyright check > │           **Flagged Files Report**         │\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ 📖 For more information, see: COMPLIANCE.md\n< file license/copyright check > │    https://github.com/qualcomm/copyright-license-checker-action/blob/main/COMPLIANCE.md\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │ 🚨  B L O C K I N G   E R R O R S\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │\n< file license/copyright check > │ ┌─ 📄 F I L E: src/module.c\n< file license/copyright check > │ │\n< file license/copyright check > │ ├─ 🚨 LICENSE ISSUES:\n< file license/copyright check > │ │  • Incompatible license added: GPL-2.0-only\n< file license/copyright check > │ └─────────────────────────────────────────\n< file license/copyright check > └───────────────────────────────────────────┘\n"  # noqa: E501
+EXPECTED_PM5_COPYLEFT_STILL_BLOCKS_CODE = 1
+
+EXPECTED_PM6_COPYRIGHT_DELETION_STILL_BLOCKS = "< file license/copyright check > ┌───────────────────────────────────────────┐\n< file license/copyright check > │           **Flagged Files Report**         │\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ 📖 For more information, see: COMPLIANCE.md\n< file license/copyright check > │    https://github.com/qualcomm/copyright-license-checker-action/blob/main/COMPLIANCE.md\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │ 🚨  B L O C K I N G   E R R O R S\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │\n< file license/copyright check > │ ┌─ 📄 F I L E: src/bar.c\n< file license/copyright check > │ │\n< file license/copyright check > │ ├─ 🚨 COPYRIGHT ISSUES:\n< file license/copyright check > │ │  • Copyright deletions detected: [' * Copyright (c) 2019 Some Other Author. All rights reserved.']\n< file license/copyright check > │ └─────────────────────────────────────────\n< file license/copyright check > └───────────────────────────────────────────┘\n"  # noqa: E501
+EXPECTED_PM6_COPYRIGHT_DELETION_STILL_BLOCKS_CODE = 1
+
 
 class TestOpensourceModeScenarios(RegressionSnapshotTestCase):
-    """COMPLIANCE.md scenarios 1-7."""
+    """COMPLIANCE.md scenarios 1-7, mode: opensource (the default)."""
 
     def test_os1_incompatible_license_added_blocks(self):
         """Scenario 1: adding a copyleft license to a permissive repo blocks."""
@@ -184,11 +229,122 @@ class TestOpensourceModeScenarios(RegressionSnapshotTestCase):
         self.assertEqual(code, EXPECTED_OS6B_MIXED_UNCERTAIN_AND_GPL_BLOCKS_CODE)
         self.assertEqual(output, EXPECTED_OS6B_MIXED_UNCERTAIN_AND_GPL_BLOCKS)
 
-    def test_os7_sole_proprietary_license_blocks(self):
-        """Special case: a solitary proprietary-license detection blocks."""
+    def test_os7_sole_proprietary_license_blocks_in_opensource_mode(self):
+        """Special case: a solitary proprietary-license detection blocks in opensource mode."""
         output, code = self.run_main(patches.ADDITION_ONLY, {"0_added.txt": PROPRIETARY_LICENSE})
         self.assertEqual(code, EXPECTED_OS7_SOLE_PROPRIETARY_BLOCKS_OPENSOURCE_CODE)
         self.assertEqual(output, EXPECTED_OS7_SOLE_PROPRIETARY_BLOCKS_OPENSOURCE)
+
+
+class TestProprietaryModeScenarios(RegressionSnapshotTestCase):
+    """Proprietary Mode section of COMPLIANCE.md."""
+
+    def test_pm1_proprietary_removal_blocks(self):
+        """
+        BUG-1 (fixed): removing a proprietary rights statement blocks per
+        COMPLIANCE.md #1. LicenseChecker.run() classifies severity once, at
+        creation time, so this message stays in flagged_files instead of
+        being reclassified as a warning by prose-matching downstream.
+        """
+        output, code = self.run_main(
+            patches.DELETION_ONLY, {"0_deleted.txt": PROPRIETARY_LICENSE}, mode="proprietary"
+        )
+        self.assertEqual(code, EXPECTED_PM1_PROPRIETARY_REMOVAL_BLOCKS_CODE)
+        self.assertEqual(output, EXPECTED_PM1_PROPRIETARY_REMOVAL_BLOCKS)
+
+    def test_pm2_permissive_addition_is_a_warning_with_notice_reminder(self):
+        """#2: adding permissive OSS code warns (with a NOTICE-file reminder), not blocks."""
+        output, code = self.run_main(
+            patches.ADDITION_ONLY, {"0_added.txt": "MIT"}, mode="proprietary"
+        )
+        self.assertEqual(code, EXPECTED_PM2_PERMISSIVE_ADDITION_WARNS_CODE)
+        self.assertEqual(output, EXPECTED_PM2_PERMISSIVE_ADDITION_WARNS)
+
+    def test_pm3_sole_proprietary_license_is_silent(self):
+        """#3: a solitary proprietary-license detection raises no issue at all."""
+        output, code = self.run_main(
+            patches.ADDITION_ONLY, {"0_added.txt": PROPRIETARY_LICENSE}, mode="proprietary"
+        )
+        self.assertEqual(code, EXPECTED_PM3_SOLE_PROPRIETARY_SILENT_CODE)
+        self.assertEqual(output, EXPECTED_PM3_SOLE_PROPRIETARY_SILENT)
+
+    def test_pm4a_new_file_with_internal_copyright_and_no_license_is_not_blocked(self):
+        """#4: a Qualcomm-copyrighted new file with no detected license is not blocked."""
+        output, code = self.run_main(
+            patches.NEW_FILE_WITH_INTERNAL_COPYRIGHT_NO_LICENSE,
+            {"0_added.txt": None},
+            mode="proprietary",
+        )
+        self.assertEqual(code, EXPECTED_PM4A_INTERNAL_COPYRIGHT_NO_LICENSE_NOT_BLOCKED_CODE)
+        self.assertEqual(output, EXPECTED_PM4A_INTERNAL_COPYRIGHT_NO_LICENSE_NOT_BLOCKED)
+
+    def test_pm4b_new_file_with_no_license_and_no_copyright_blocks_distinctly(self):
+        """#4: with neither a license nor a recognized internal copyright, it still blocks."""
+        output, code = self.run_main(
+            patches.NEW_FILE_NO_LICENSE_NO_COPYRIGHT, {"0_added.txt": None}, mode="proprietary"
+        )
+        self.assertEqual(code, EXPECTED_PM4B_NO_LICENSE_NO_COPYRIGHT_BLOCKS_DISTINCTLY_CODE)
+        self.assertEqual(output, EXPECTED_PM4B_NO_LICENSE_NO_COPYRIGHT_BLOCKS_DISTINCTLY)
+
+    def test_pm5_copyleft_addition_still_blocks(self):
+        """Copyleft is unaffected by proprietary mode and still blocks."""
+        output, code = self.run_main(
+            patches.ADDITION_ONLY, {"0_added.txt": "GPL-2.0-only"}, mode="proprietary"
+        )
+        self.assertEqual(code, EXPECTED_PM5_COPYLEFT_STILL_BLOCKS_CODE)
+        self.assertEqual(output, EXPECTED_PM5_COPYLEFT_STILL_BLOCKS)
+
+    def test_pm6_copyright_deletion_still_blocks(self):
+        """Copyright deletion rules are unaffected by proprietary mode and still block."""
+        output, code = self.run_main(
+            patches.MODIFIED_WITH_DELETED_COPYRIGHT, {"0_deleted.txt": None}, mode="proprietary"
+        )
+        self.assertEqual(code, EXPECTED_PM6_COPYRIGHT_DELETION_STILL_BLOCKS_CODE)
+        self.assertEqual(output, EXPECTED_PM6_COPYRIGHT_DELETION_STILL_BLOCKS)
+
+
+class TestBug2ExitCodeTruncation(RegressionSnapshotTestCase):
+    """
+    BUG-2: sys.exit(len(flagged_files)) hands the OS a POSIX exit status,
+    which is truncated to 8 bits -- 256, 512, ... all become 0 (a passing
+    build). Deliberately not asserted as a full literal snapshot: the report
+    text for 256 files is enormous and each file's block is identical except
+    for its path, so the value-add of pinning it byte-for-byte is low next to
+    the cost of a 20KB string literal. Structural assertions (exit code,
+    section header, per-file block count) capture the same regression risk.
+    """
+
+    def test_256_flagged_files_currently_masks_to_exit_zero(self):
+        """
+        256 distinct blocking issues -> sys.exit(256), which the OS's 8-bit
+        exit status masks to 0 (a passing build). Step 2 is expected to
+        change this to sys.exit(1) regardless of the flagged-file count, so
+        the masked value flips from 0 to 1.
+        """
+        file_count = 256
+        diff_parts = []
+        detections = {}
+        for idx in range(file_count):
+            diff_parts.append(f"""diff --git a/src/file_{idx}.c b/src/file_{idx}.c
+index 1234567..89abcde 100644
+--- a/src/file_{idx}.c
++++ b/src/file_{idx}.c
+@@ -1,1 +1,2 @@
+ int f(void) {{
++    /* gpl text {idx} */
+""")
+            detections[f"{idx}_added.txt"] = "GPL-2.0-only"
+
+        output, code = self.run_main("".join(diff_parts), detections)
+
+        self.assertEqual(code, file_count)
+        self.assertEqual(
+            code & 0xFF, 0, "BUG-2: the OS-level exit status for 256 flagged files is 0"
+        )
+        self.assertIn("B L O C K I N G   E R R O R S", output)
+        self.assertEqual(output.count("F I L E:"), file_count)
+        for idx in range(file_count):
+            self.assertIn(f"src/file_{idx}.c", output)
 
 
 if __name__ == "__main__":
