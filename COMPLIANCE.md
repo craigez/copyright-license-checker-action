@@ -212,7 +212,7 @@ These cases require human review but shouldn't automatically block development, 
 
 ### Special Case: Sole Proprietary License
 
-> **Mode-dependent:** this section describes `mode: opensource` (the default). In `mode: proprietary` a sole proprietary detection is *expected* and raises no issue at all — see [Proprietary Mode](#proprietary-mode).
+> **Mode-dependent:** this section describes `mode: opensource` (the default). In `mode: proprietary` a sole proprietary detection is *expected* and raises no issue at all, unless the same change deletes a license of its own — see [Proprietary Mode](#proprietary-mode).
 
 **What triggers this:**
 - A file contains ONLY `LicenseRef-scancode-proprietary-license` with no other licenses
@@ -305,6 +305,19 @@ This applies whether the file was previously unmarked or keeps its proprietary m
 #### 3. Sole proprietary license detection — NO ISSUE
 
 A file detected as only `LicenseRef-scancode-proprietary-license` is the normal case for an internal Qualcomm header and raises no issue. (In `opensource` mode this blocks — see the section above.)
+
+This covers adding an internal header, and reformatting one that is already there. It does **not** extend to a change that gives up a license of its own: deleting a real license and marking the file proprietary in its place is a relicensing of third-party code, and still blocks as a license change (scenario 3 above).
+
+```
+🚨 BLOCKING ERROR:
+📄 File: src/core.cpp
+🚨 License issues detected:
+  - License deleted: MIT and license added: LicenseRef-scancode-proprietary-license
+```
+
+**How to fix:**
+- Restore the original license header — a permissive license's attribution terms survive vendoring into a proprietary repository
+- If the file is genuinely Qualcomm-authored and the OSS header was there in error, route the change to the scan team/legal rather than removing the header yourself
 
 #### 4. New source file with no license — BLOCKING, with different guidance
 
