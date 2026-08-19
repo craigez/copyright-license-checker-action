@@ -20,6 +20,14 @@ BUG-2 (fixed): sys.exit(len(flagged_files)) truncated to 0 at exactly 256
 flagged files (POSIX exit statuses are 8-bit). main() now exits 1 for any
 blocking issue regardless of file count -- see
 TestBug2ExitCodeTruncation.test_256_flagged_files_exits_nonzero below.
+
+BUG-3 (fixed): in proprietary mode, deleting a permissive license and adding
+a proprietary marking in its place reported nothing at all, because the
+"solitary proprietary detection is expected" rule ignored the deleted side.
+The skip now also requires that the deleted side gives up no license of its
+own -- see
+TestProprietaryModeScenarios.test_pm8_permissive_swapped_for_proprietary_blocks
+and the pm9/pm10 cases below.
 """
 
 import contextlib
@@ -172,6 +180,20 @@ EXPECTED_PM5_COPYLEFT_STILL_BLOCKS_CODE = 1
 EXPECTED_PM6_COPYRIGHT_DELETION_STILL_BLOCKS = "< file license/copyright check > ┌───────────────────────────────────────────┐\n< file license/copyright check > │           **Flagged Files Report**         │\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ 📖 For more information, see: COMPLIANCE.md\n< file license/copyright check > │    https://github.com/qualcomm/copyright-license-checker-action/blob/main/COMPLIANCE.md\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │ 🚨  B L O C K I N G   E R R O R S\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │\n< file license/copyright check > │ ┌─ 📄 F I L E: src/bar.c\n< file license/copyright check > │ │\n< file license/copyright check > │ ├─ 🚨 COPYRIGHT ISSUES:\n< file license/copyright check > │ │  • Copyright deletions detected: [' * Copyright (c) 2019 Some Other Author. All rights reserved.']\n< file license/copyright check > │ └─────────────────────────────────────────\n< file license/copyright check > └───────────────────────────────────────────┘\n"  # noqa: E501
 EXPECTED_PM6_COPYRIGHT_DELETION_STILL_BLOCKS_CODE = 1
 
+EXPECTED_PM7_PROPRIETARY_SWAPPED_FOR_PERMISSIVE_BLOCKS = "< file license/copyright check > ┌───────────────────────────────────────────┐\n< file license/copyright check > │           **Flagged Files Report**         │\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ 📖 For more information, see: COMPLIANCE.md\n< file license/copyright check > │    https://github.com/qualcomm/copyright-license-checker-action/blob/main/COMPLIANCE.md\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │ 🚨  B L O C K I N G   E R R O R S\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │\n< file license/copyright check > │ ┌─ 📄 F I L E: src/core.cpp\n< file license/copyright check > │ │\n< file license/copyright check > │ ├─ 🚨 LICENSE ISSUES:\n< file license/copyright check > │ │  • Proprietary license statement removed: LicenseRef-scancode-proprietary-license -- removing a proprietary rights statement requires review; restore it, or route the change to the scan team/legal if the file's status has genuinely changed.\n< file license/copyright check > │ └─────────────────────────────────────────\n< file license/copyright check > └───────────────────────────────────────────┘\n"  # noqa: E501
+EXPECTED_PM7_PROPRIETARY_SWAPPED_FOR_PERMISSIVE_BLOCKS_CODE = 1
+
+EXPECTED_PM8_PERMISSIVE_SWAPPED_FOR_PROPRIETARY_BLOCKS = "< file license/copyright check > ┌───────────────────────────────────────────┐\n< file license/copyright check > │           **Flagged Files Report**         │\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ 📖 For more information, see: COMPLIANCE.md\n< file license/copyright check > │    https://github.com/qualcomm/copyright-license-checker-action/blob/main/COMPLIANCE.md\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │ 🚨  B L O C K I N G   E R R O R S\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │\n< file license/copyright check > │ ┌─ 📄 F I L E: src/core.cpp\n< file license/copyright check > │ │\n< file license/copyright check > │ ├─ 🚨 LICENSE ISSUES:\n< file license/copyright check > │ │  • License deleted: MIT and license added: LicenseRef-scancode-proprietary-license\n< file license/copyright check > │ └─────────────────────────────────────────\n< file license/copyright check > └───────────────────────────────────────────┘\n"  # noqa: E501
+EXPECTED_PM8_PERMISSIVE_SWAPPED_FOR_PROPRIETARY_BLOCKS_CODE = 1
+
+EXPECTED_PM9_MARKER_STRIPPED_FROM_COMPOUND_BLOCKS = "< file license/copyright check > ┌───────────────────────────────────────────┐\n< file license/copyright check > │           **Flagged Files Report**         │\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ 📖 For more information, see: COMPLIANCE.md\n< file license/copyright check > │    https://github.com/qualcomm/copyright-license-checker-action/blob/main/COMPLIANCE.md\n< file license/copyright check > ├───────────────────────────────────────────┤\n< file license/copyright check > │\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │ 🚨  B L O C K I N G   E R R O R S\n< file license/copyright check > │ ═══════════════════════════════════════════\n< file license/copyright check > │\n< file license/copyright check > │ ┌─ 📄 F I L E: src/core.cpp\n< file license/copyright check > │ │\n< file license/copyright check > │ ├─ 🚨 LICENSE ISSUES:\n< file license/copyright check > │ │  • License deleted: MIT AND LicenseRef-scancode-proprietary-license and license added: LicenseRef-scancode-proprietary-license\n< file license/copyright check > │ └─────────────────────────────────────────\n< file license/copyright check > └───────────────────────────────────────────┘\n"  # noqa: E501
+EXPECTED_PM9_MARKER_STRIPPED_FROM_COMPOUND_BLOCKS_CODE = 1
+
+EXPECTED_PM10_PROPRIETARY_MARKING_REFORMATTED_SILENT = (
+    "< file license/copyright check > ✅ No license or copyright issues detected\n"
+)
+EXPECTED_PM10_PROPRIETARY_MARKING_REFORMATTED_SILENT_CODE = 0
+
 
 class TestOpensourceModeScenarios(RegressionSnapshotTestCase):
     """COMPLIANCE.md scenarios 1-7, mode: opensource (the default)."""
@@ -301,6 +323,88 @@ class TestProprietaryModeScenarios(RegressionSnapshotTestCase):
         )
         self.assertEqual(code, EXPECTED_PM6_COPYRIGHT_DELETION_STILL_BLOCKS_CODE)
         self.assertEqual(output, EXPECTED_PM6_COPYRIGHT_DELETION_STILL_BLOCKS)
+
+    def test_pm7_proprietary_swapped_for_permissive_blocks_without_notice_warning(self):
+        """
+        Swap direction 1 -- proprietary marking deleted, permissive OSS license
+        added in its place. #1 (proprietary removal blocks) takes precedence
+        over #2 (permissive addition warns): the report carries only the
+        blocking removal message, and the NOTICE-attribution reminder that a
+        bare MIT addition would produce is deliberately suppressed so the
+        report is not muddied. Contrast test_pm2, where the same MIT addition
+        with nothing deleted warns and exits 0.
+        """
+        output, code = self.run_main(
+            patches.ADDITION_AND_DELETION,
+            {"0_added.txt": "MIT", "0_deleted.txt": PROPRIETARY_LICENSE},
+            mode="proprietary",
+        )
+        self.assertEqual(code, EXPECTED_PM7_PROPRIETARY_SWAPPED_FOR_PERMISSIVE_BLOCKS_CODE)
+        self.assertEqual(output, EXPECTED_PM7_PROPRIETARY_SWAPPED_FOR_PERMISSIVE_BLOCKS)
+        self.assertNotIn("W A R N I N G S", output)
+
+    def test_pm8_permissive_swapped_for_proprietary_blocks(self):
+        """
+        Swap direction 2 -- permissive OSS license deleted, proprietary marking
+        added in its place. BUG-3 (fixed): this used to report nothing at all.
+
+        Rule #3 ("a solitary proprietary detection on the added side raises no
+        issue") is evaluated before the deleted side is classified, and used to
+        ignore the deleted side entirely -- swallowing the license change that
+        the same deletion reports without the proprietary replacement, per
+        test_pm8_control_permissive_deleted_alone_blocks. The skip now also
+        requires that the deleted side gives up no license of its own, so
+        relicensing third-party code as proprietary is reported as the license
+        change COMPLIANCE.md scenario 3 rates HIGH impact.
+        """
+        output, code = self.run_main(
+            patches.ADDITION_AND_DELETION,
+            {"0_added.txt": PROPRIETARY_LICENSE, "0_deleted.txt": "MIT"},
+            mode="proprietary",
+        )
+        self.assertEqual(code, EXPECTED_PM8_PERMISSIVE_SWAPPED_FOR_PROPRIETARY_BLOCKS_CODE)
+        self.assertEqual(output, EXPECTED_PM8_PERMISSIVE_SWAPPED_FOR_PROPRIETARY_BLOCKS)
+
+    def test_pm8_control_permissive_deleted_alone_blocks(self):
+        """
+        Control for BUG-3: the identical MIT deletion, with no proprietary
+        marking added back, blocks. Isolates the added-side proprietary
+        detection as what used to make test_pm8 report nothing.
+        """
+        _, code = self.run_main(
+            patches.ADDITION_AND_DELETION, {"0_deleted.txt": "MIT"}, mode="proprietary"
+        )
+        self.assertEqual(code, 1)
+
+    def test_pm9_marker_stripped_from_compound_deleted_expression_blocks(self):
+        """
+        BUG-3, compound form: the deleted side carries the proprietary marker
+        *and* a real license, and only the marker survives. Since the marker is
+        on both sides this is not a proprietary removal, so the block has to
+        come from the deleted MIT -- which requires the added-side skip to
+        weigh the deleted side component-wise rather than whole-string.
+        """
+        output, code = self.run_main(
+            patches.ADDITION_AND_DELETION,
+            {"0_added.txt": PROPRIETARY_LICENSE, "0_deleted.txt": f"MIT AND {PROPRIETARY_LICENSE}"},
+            mode="proprietary",
+        )
+        self.assertEqual(code, EXPECTED_PM9_MARKER_STRIPPED_FROM_COMPOUND_BLOCKS_CODE)
+        self.assertEqual(output, EXPECTED_PM9_MARKER_STRIPPED_FROM_COMPOUND_BLOCKS)
+
+    def test_pm10_proprietary_marking_on_both_sides_is_silent(self):
+        """
+        The BUG-3 fix must not make reformatting noisy: the marker appearing on
+        both sides of the diff (e.g. a rewrapped internal header) gives up no
+        license, so it stays silent rather than reading as a license change.
+        """
+        output, code = self.run_main(
+            patches.ADDITION_AND_DELETION,
+            {"0_added.txt": PROPRIETARY_LICENSE, "0_deleted.txt": PROPRIETARY_LICENSE},
+            mode="proprietary",
+        )
+        self.assertEqual(code, EXPECTED_PM10_PROPRIETARY_MARKING_REFORMATTED_SILENT_CODE)
+        self.assertEqual(output, EXPECTED_PM10_PROPRIETARY_MARKING_REFORMATTED_SILENT)
 
 
 class TestBug2ExitCodeTruncation(RegressionSnapshotTestCase):

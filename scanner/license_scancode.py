@@ -377,7 +377,10 @@ class LicenseChecker:
           unaffected and still block.
         - A solitary proprietary-license detection on the added side is
           expected for internal headers and raises no issue at all, instead
-          of the blocking error it is in opensource mode.
+          of the blocking error it is in opensource mode -- but only when the
+          change gives up no license of its own. Deleting a real license and
+          marking the file proprietary in its place is a relicensing of
+          third-party code and is still reported.
         - A new source file with no detected license is not blocked if it
           carries a copyright naming one of self.proprietary_entities (the
           normal case for internal files). Otherwise it is still blocked,
@@ -408,7 +411,7 @@ class LicenseChecker:
                 added_licenses, deleted_licenses
             )
 
-            if proprietary and not proprietary_removed and added_licenses == PROPRIETARY_LICENSE:
+            if proprietary and self._is_expected_internal_marking(added_licenses, deleted_licenses):
                 # Expected for internal Qualcomm headers; not an issue at all.
                 continue
 
@@ -521,6 +524,33 @@ class LicenseChecker:
             lic for lic in split_license_components(expression) if lic != PROPRIETARY_LICENSE
         ]
         return " AND ".join(remaining)
+
+    @classmethod
+    def _is_expected_internal_marking(cls, added_licenses: str, deleted_licenses: str) -> bool:
+        """
+        Check whether a change is no more than an internal marking appearing.
+
+        True when the added side is a solitary proprietary marker *and* the
+        deleted side gives up no license of its own -- the normal shape of a
+        change that adds, or merely reformats, an internal Qualcomm header.
+        That raises no issue at all in proprietary mode.
+
+        The deleted-side condition is what keeps this from swallowing a
+        relicensing: a diff that drops a real license (say MIT) and marks the
+        file proprietary in its place is a license change on third-party code,
+        and must still be reported rather than waved through as an expected
+        internal header.
+
+        Args:
+            added_licenses (str): SPDX expression detected on added lines.
+            deleted_licenses (str): SPDX expression detected on deleted lines.
+
+        Returns:
+            bool: True if the change is an expected internal marking.
+        """
+        if added_licenses != PROPRIETARY_LICENSE:
+            return False
+        return not cls._without_proprietary_marker(deleted_licenses)
 
     @staticmethod
     def _proprietary_marking_removed(added_licenses: str, deleted_licenses: str) -> bool:
