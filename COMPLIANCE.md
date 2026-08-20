@@ -312,7 +312,7 @@ This covers adding an internal header, and reformatting one that is already ther
 🚨 BLOCKING ERROR:
 📄 File: src/core.cpp
 🚨 License issues detected:
-  - License deleted: MIT and license added: LicenseRef-scancode-proprietary-license
+  - License deleted: MIT and license added: LicenseRef-scancode-proprietary-license -- a permissive license's attribution terms are not extinguished by marking the file proprietary; restore the deleted license, or route the change to the scan team/legal if the file's licensing has genuinely changed.
 ```
 
 **How to fix:**

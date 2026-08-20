@@ -466,6 +466,12 @@ class LicenseChecker:
         warnings_for_file = []
         if proprietary_removed:
             issues.append(self._proprietary_removed_message(deleted_licenses))
+        elif proprietary and deleted_licenses and added_licenses == PROPRIETARY_LICENSE:
+            # A real license replaced by a bare proprietary marking: the same
+            # relicensing hazard as the generic "License deleted/added" message
+            # below, but naming the marker specifically rather than reporting
+            # it as though a different real license had been substituted.
+            issues.append(self._relicensed_as_proprietary_message(deleted_licenses))
         # Check if licenses changed
         elif added_licenses and deleted_licenses and added_licenses != deleted_licenses:
             # Only flag if the new license is NOT permissive. This allows dual-license
@@ -590,6 +596,33 @@ class LicenseChecker:
             f"Proprietary license statement removed: {deleted_licenses} -- removing a "
             "proprietary rights statement requires review; restore it, or route the "
             "change to the scan team/legal if the file's status has genuinely changed."
+        )
+
+    @staticmethod
+    def _relicensed_as_proprietary_message(deleted_licenses: str) -> str:
+        """
+        Build the blocking message for a real license replaced by a bare
+        proprietary marking.
+
+        Distinct from _proprietary_removed_message: here the proprietary
+        marker is being *added*, not removed, but the deleted side still gave
+        up a real license -- e.g. deleting an MIT header and marking the file
+        proprietary in its place. Naming the marker directly is clearer than
+        the generic license-change message, since "license added:
+        LicenseRef-scancode-proprietary-license" reads as though some other
+        real license had been substituted rather than a proprietary claim.
+
+        Args:
+            deleted_licenses (str): The deleted SPDX license expression.
+
+        Returns:
+            str: A blocking error message.
+        """
+        return (
+            f"License deleted: {deleted_licenses} and license added: {PROPRIETARY_LICENSE} -- "
+            "a permissive license's attribution terms are not extinguished by marking the "
+            "file proprietary; restore the deleted license, or route the change to the scan "
+            "team/legal if the file's licensing has genuinely changed."
         )
 
     @staticmethod
