@@ -7,30 +7,16 @@ import subprocess
 import tempfile
 from scanner import config
 from scanner.patch import Patch
-from scanner.license_scancode import LicenseChecker, PERMISSIVE_LICENSES
+from scanner.license_scancode import LicenseChecker
+from scanner.licenses import (
+    COPYLEFT_LICENSES,
+    PERMISSIVE_LICENSES,
+    is_copyleft,
+    split_license_components,
+)
 from scanner.copyright_checker import CopyrightChecker, DEFAULT_INTERNAL_ENTITIES
 
 LOG_PREFIX = "< file license/copyright check >"
-
-COPYLEFT_LICENSES = [
-    "GPL-1.0-only",
-    "GPL-1.0-or-later",
-    "GPL-2.0-only",
-    "GPL-2.0-or-later",
-    "GPL-3.0-only",
-    "GPL-3.0",
-    "GPL-3.0-or-later",
-    "AGPL-3.0",
-    "LGPL-3.0",
-    "GPL-2.0",
-    "GPL-2.0+",
-    "GPL-2.0-only WITH Linux-syscall-note",
-    "AGPL-1.0-only",
-    "AGPL-1.0-or-later",
-    "LicenseRef-scancode-agpl-2.0",
-    "AGPL-3.0-only",
-    "AGPL-3.0-or-later",
-]
 
 
 def detect_license_from_file(license_file_path: str) -> str:
@@ -310,17 +296,11 @@ def main() -> None:  # noqa: C901
         repo_license = get_license(repo_name)
         if repo_license in PERMISSIVE_LICENSES:
             allowed_licenses = PERMISSIVE_LICENSES
-        elif repo_license in COPYLEFT_LICENSES:
+        elif is_copyleft(repo_license):
             allowed_licenses = COPYLEFT_LICENSES
         else:
             # Handle complex license expressions (e.g., "GPL-2.0-only AND GPL-2.0-or-later")
-            # Parse the expression and include all component licenses
-            allowed_licenses = []
-            for part in repo_license.replace("(", "").replace(")", "").split(" AND "):
-                for lic in part.split(" OR "):
-                    lic = lic.strip()
-                    if lic:
-                        allowed_licenses.append(lic)
+            allowed_licenses = split_license_components(repo_license)
 
             # If no licenses were parsed, use the original license
             if not allowed_licenses:

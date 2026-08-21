@@ -10,97 +10,16 @@ import os
 from pathlib import Path
 
 from scanner.copyright_checker import DEFAULT_INTERNAL_ENTITIES, has_internal_copyright
+from scanner.licenses import (
+    PROPRIETARY_LICENSE,
+    is_license_allowed,
+    is_permissive,
+    is_uncertain_expression,
+    split_license_components,
+)
 from scanner.patch import Patch
 
 warnings.filterwarnings("ignore", message="Libmagic magic database not found")
-
-# Canonical permissive-license list, independent of any repo's own detected
-# license. In proprietary mode, permissive-OSS additions are judged against
-# this list rather than self.permissive_licenses (which is derived from the
-# scanning repo's own license and is not a meaningful baseline for a repo
-# that correctly has no LICENSE file -- see LicenseChecker.run()).
-PERMISSIVE_LICENSES = [
-    "BSD-3-Clause",
-    "MIT",
-    "Apache-1.0",
-    "Apache-1.1",
-    "Apache-2.0",
-    "BSD-3-Clause-Clear",
-    "FreeBSD-DOC",
-    "Zlib",
-    "BSD-1-Clause",
-    "BSD-2-Clause",
-    "BSD-2-Clause-first-lines",
-    "BSD-2-Clause-Views",
-    "BSD-3-Clause-Sun",
-    "BSD-4-Clause-Shortened",
-    "BSD-3-Clause-Attribution",
-    "BSD-4-Clause",
-    "ISC",
-    "CC0-1.0",
-    "ICU",
-    "LicenseRef-scancode-unicode",
-    "Apache-2.0 WITH LLVM-exception",
-    "Apache-2.0 WITH LLVM-exception AND Apache-2.0 AND LLVM-exception",
-]
-
-# What scancode reports for a Qualcomm-style proprietary rights statement.
-PROPRIETARY_LICENSE = "LicenseRef-scancode-proprietary-license"
-
-
-def split_license_components(expression: str) -> list:
-    """
-    Split an SPDX expression into its individual license components.
-
-    Used for component-level checks that a whole-expression evaluation would
-    miss -- e.g. spotting the proprietary marker inside
-    "LicenseRef-scancode-proprietary-license AND GPL-2.0-only".
-
-    Args:
-        expression: An SPDX license expression, possibly compound.
-
-    Returns:
-        List of individual license identifiers, parentheses stripped.
-    """
-    if not expression:
-        return []
-    components = []
-    for part in expression.replace("(", "").replace(")", "").split(" AND "):
-        for lic in part.split(" OR "):
-            lic = lic.strip()
-            if lic:
-                components.append(lic)
-    return components
-
-
-def is_uncertain_expression(expression: str) -> bool:
-    """
-    Check whether every component of an SPDX expression is an uncertain
-    (unrecognized) license, making the expression a warning rather than a
-    blocking error.
-
-    A component is uncertain when it is a "LicenseRef-scancode-*" identifier
-    that isn't in PERMISSIVE_LICENSES -- i.e. scancode couldn't map it to a
-    known license. A solitary PROPRIETARY_LICENSE is the one exception: it is
-    always a blocking error on its own (see COMPLIANCE.md scenario 7), so it
-    is never treated as uncertain here.
-
-    Args:
-        expression: An SPDX license expression, possibly compound.
-
-    Returns:
-        bool: True if every component is uncertain, False otherwise
-            (including for an empty/unparseable expression).
-    """
-    licenses = split_license_components(expression)
-    if not licenses:
-        return False
-    if len(licenses) == 1 and licenses[0] == PROPRIETARY_LICENSE:
-        return False
-    return all(
-        lic.startswith("LicenseRef-scancode-") and lic not in PERMISSIVE_LICENSES
-        for lic in licenses
-    )
 
 
 def _route_license_message(
@@ -145,94 +64,6 @@ class LicenseChecker:
         self.proprietary_entities = (
             proprietary_entities if proprietary_entities is not None else DEFAULT_INTERNAL_ENTITIES
         )
-
-    # TODO: exceeds team max-complexity=10, branch count, and nesting depth
-    # (SPDX expression evaluation covers AND/OR grouping plus GPL "-or-later"
-    # compatibility; revisit extraction after proprietary mode lands, which
-    # adds a canonical-list evaluation path).
-    def is_license_permissive(self, scancode_license: str) -> bool:  # noqa: C901
-        # pylint: disable=too-many-branches,too-many-nested-blocks
-        """
-        Check if a license is permissive by evaluating SPDX license expressions.
-
-        Special handling for dual-license scenarios:
-        - If expression starts with (X OR Y), we check if at least one option is permissive
-        - If the same licenses appear later with AND, we ignore them (they're from comments)
-
-        For OR expressions: At least one option must be permissive
-        For AND expressions: All components must be permissive
-
-        Special GPL compatibility handling:
-        - If project has GPL-X.Y-or-later, files with GPL-X.Y-only or
-          GPL-X.Y-or-later are compatible
-
-        Args:
-            scancode_license (str): The SPDX license expression to check.
-
-        Returns:
-            bool: True if the license expression is permissive, False otherwise.
-        """
-        expression = scancode_license.strip()
-
-        # Check if this is a dual-license pattern: starts with (X OR Y) AND ...
-        # In this case, if the OR part has a permissive option, we accept it
-        if expression.startswith("(") and " OR " in expression.split(")")[0]:
-            # Extract the OR part
-            or_part = expression.split(")")[0] + ")"
-            or_part_clean = or_part.strip("()")
-            or_licenses = [lic.strip() for lic in or_part_clean.split(" OR ")]
-
-            # Check if at least one license in the OR is permissive
-            for lic in or_licenses:
-                if lic in self.permissive_licenses:
-                    return True
-
-            return False
-
-        # Standard evaluation: split by AND first to get AND-groups
-        and_groups = [group.strip() for group in expression.split(" AND ")]
-
-        # For each AND group, check if it's permissive
-        for and_group in and_groups:
-            # Check if this group contains OR
-            if " OR " in and_group:
-                # Remove parentheses
-                and_group = and_group.strip("()")
-                # Split by OR - at least one must be permissive
-                or_licenses = [lic.strip() for lic in and_group.split(" OR ")]
-
-                # Check if at least one license in the OR group is permissive
-                has_permissive = False
-                for lic in or_licenses:
-                    if lic in self.permissive_licenses:
-                        has_permissive = True
-                        break
-
-                if not has_permissive:
-                    return False
-            else:
-                # Single license in this AND group - must be permissive
-                lic = and_group.strip("()")
-
-                # Check GPL "or-later" compatibility
-                # If the file has GPL-X.Y-only or GPL-X.Y-or-later, and the
-                # project allows GPL-X.Y-or-later, it's compatible
-                if lic not in self.permissive_licenses:
-                    # Check if this is a GPL license compatibility case
-                    is_compatible = False
-                    for allowed_lic in self.permissive_licenses:
-                        if "-or-later" in allowed_lic:
-                            # Extract base license (e.g., "GPL-2.0" from "GPL-2.0-or-later")
-                            base_license = allowed_lic.replace("-or-later", "")
-                            # Check if file license is compatible
-                            if lic in (allowed_lic, f"{base_license}-only", base_license):
-                                is_compatible = True
-                                break
-
-                    if not is_compatible:
-                        return False
-
-        return True
 
     # TODO: exceeds team max-complexity=10 and local-variable count (batches
     # added/deleted line groups across all changes into one scancode
@@ -458,8 +289,8 @@ class LicenseChecker:
         added_for_permissiveness = (
             self._without_proprietary_marker(added_licenses) if proprietary else added_licenses
         )
-        added_is_permissive = bool(added_for_permissiveness) and self.is_license_permissive(
-            added_for_permissiveness
+        added_is_allowed = bool(added_for_permissiveness) and is_license_allowed(
+            added_for_permissiveness, self.permissive_licenses
         )
 
         issues = []
@@ -474,14 +305,14 @@ class LicenseChecker:
             issues.append(self._relicensed_as_proprietary_message(deleted_licenses))
         # Check if licenses changed
         elif added_licenses and deleted_licenses and added_licenses != deleted_licenses:
-            # Only flag if the new license is NOT permissive. This allows dual-license
+            # Only flag if the new license is NOT allowed. This allows dual-license
             # scenarios like "BSD-3-Clause OR GPL-2.0-only" where at least one option
-            # is permissive.
-            if not added_is_permissive:
+            # is allowed.
+            if not added_is_allowed:
                 message = f"License deleted: {deleted_licenses} and license added: {added_licenses}"  # noqa: E501
                 _route_license_message(message, added_licenses, issues, warnings_for_file)
-        elif added_licenses and not added_is_permissive:
-            # New license added that is not permissive
+        elif added_licenses and not added_is_allowed:
+            # New license added that is not allowed
             message = f"Incompatible license added: {added_licenses}"
             _route_license_message(message, added_licenses, issues, warnings_for_file)
         elif deleted_licenses and not added_licenses:
@@ -493,13 +324,19 @@ class LicenseChecker:
         # showing identically on both sides of the diff, e.g. from reformatting).
         # In proprietary mode this warns about the NOTICE attribution obligation.
         # Skipped when a proprietary marking was removed -- that is an error above,
-        # and warning about it too would muddy the report.
+        # and warning about it too would muddy the report. Judged against the
+        # canonical is_permissive() rather than added_is_allowed/
+        # self.permissive_licenses: this is specifically "is this permissive
+        # open-source code," not "is this allowed for the calling repo," and
+        # must not depend on whatever list happened to be passed to the
+        # constructor.
         license_is_new_or_changed = added_licenses and added_licenses != deleted_licenses
         if (
             proprietary
             and not proprietary_removed
             and license_is_new_or_changed
-            and added_is_permissive
+            and added_for_permissiveness
+            and is_permissive(added_for_permissiveness)
         ):
             warning_files.setdefault(change["path_name"], []).append(
                 self._notice_reminder(added_licenses)
