@@ -8,3 +8,4 @@ tests/**
 main.py
 scanner/config.py
 scanner/license_scancode.py
+scanner/copyright_checker.py

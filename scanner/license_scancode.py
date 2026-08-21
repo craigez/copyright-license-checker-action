@@ -9,9 +9,106 @@ import warnings
 import os
 from pathlib import Path
 
+from scanner.copyright_checker import DEFAULT_INTERNAL_ENTITIES, has_internal_copyright
 from scanner.patch import Patch
 
 warnings.filterwarnings("ignore", message="Libmagic magic database not found")
+
+# Canonical permissive-license list, independent of any repo's own detected
+# license. In proprietary mode, permissive-OSS additions are judged against
+# this list rather than self.permissive_licenses (which is derived from the
+# scanning repo's own license and is not a meaningful baseline for a repo
+# that correctly has no LICENSE file -- see LicenseChecker.run()).
+PERMISSIVE_LICENSES = [
+    "BSD-3-Clause",
+    "MIT",
+    "Apache-1.0",
+    "Apache-1.1",
+    "Apache-2.0",
+    "BSD-3-Clause-Clear",
+    "FreeBSD-DOC",
+    "Zlib",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-2-Clause-first-lines",
+    "BSD-2-Clause-Views",
+    "BSD-3-Clause-Sun",
+    "BSD-4-Clause-Shortened",
+    "BSD-3-Clause-Attribution",
+    "BSD-4-Clause",
+    "ISC",
+    "CC0-1.0",
+    "ICU",
+    "LicenseRef-scancode-unicode",
+    "Apache-2.0 WITH LLVM-exception",
+    "Apache-2.0 WITH LLVM-exception AND Apache-2.0 AND LLVM-exception",
+]
+
+# What scancode reports for a Qualcomm-style proprietary rights statement.
+PROPRIETARY_LICENSE = "LicenseRef-scancode-proprietary-license"
+
+
+def split_license_components(expression: str) -> list:
+    """
+    Split an SPDX expression into its individual license components.
+
+    Used for component-level checks that a whole-expression evaluation would
+    miss -- e.g. spotting the proprietary marker inside
+    "LicenseRef-scancode-proprietary-license AND GPL-2.0-only".
+
+    Args:
+        expression: An SPDX license expression, possibly compound.
+
+    Returns:
+        List of individual license identifiers, parentheses stripped.
+    """
+    if not expression:
+        return []
+    components = []
+    for part in expression.replace("(", "").replace(")", "").split(" AND "):
+        for lic in part.split(" OR "):
+            lic = lic.strip()
+            if lic:
+                components.append(lic)
+    return components
+
+
+def is_uncertain_expression(expression: str) -> bool:
+    """
+    Check whether every component of an SPDX expression is an uncertain
+    (unrecognized) license, making the expression a warning rather than a
+    blocking error.
+
+    A component is uncertain when it is a "LicenseRef-scancode-*" identifier
+    that isn't in PERMISSIVE_LICENSES -- i.e. scancode couldn't map it to a
+    known license. A solitary PROPRIETARY_LICENSE is the one exception: it is
+    always a blocking error on its own (see COMPLIANCE.md scenario 7), so it
+    is never treated as uncertain here.
+
+    Args:
+        expression: An SPDX license expression, possibly compound.
+
+    Returns:
+        bool: True if every component is uncertain, False otherwise
+            (including for an empty/unparseable expression).
+    """
+    licenses = split_license_components(expression)
+    if not licenses:
+        return False
+    if len(licenses) == 1 and licenses[0] == PROPRIETARY_LICENSE:
+        return False
+    return all(
+        lic.startswith("LicenseRef-scancode-") and lic not in PERMISSIVE_LICENSES
+        for lic in licenses
+    )
+
+
+def _route_license_message(
+    message: str, expression: str, issues: list, warning_messages: list
+) -> None:
+    """Append message to warning_messages if expression is uncertain, otherwise to issues."""
+    target = warning_messages if is_uncertain_expression(expression) else issues
+    target.append(message)
 
 
 class LicenseChecker:
@@ -19,7 +116,14 @@ class LicenseChecker:
     Class to check for licenses in a patch file.
     """
 
-    def __init__(self, patch: Patch, repo: str, permissive_licenses: list) -> None:
+    def __init__(
+        self,
+        patch: Patch,
+        repo: str,
+        permissive_licenses: list,
+        mode: str = "opensource",
+        proprietary_entities: list | None = None,
+    ) -> None:
         """
         Initialize the LicenseChecker object.
 
@@ -27,10 +131,20 @@ class LicenseChecker:
             patch (Patch): The patch file to check.
             repo (str): The repository name.
             permissive_licenses (list): A list of permissive licenses.
+            mode (str): "opensource" (default) or "proprietary". In
+                "opensource" mode, run() behavior is unchanged from before
+                mode support existed.
+            proprietary_entities (list): Copyright-holder substrings treated
+                as internal authorship in proprietary mode. Defaults to
+                scanner.copyright_checker.DEFAULT_INTERNAL_ENTITIES when None.
         """
         self.patch = patch
         self.repo = repo
         self.permissive_licenses = permissive_licenses
+        self.mode = mode
+        self.proprietary_entities = (
+            proprietary_entities if proprietary_entities is not None else DEFAULT_INTERNAL_ENTITIES
+        )
 
     # TODO: exceeds team max-complexity=10, branch count, and nesting depth
     # (SPDX expression evaluation covers AND/OR grouping plus GPL "-or-later"
@@ -237,50 +351,319 @@ class LicenseChecker:
         return False
 
     # TODO: exceeds team max-complexity=10 (rule branches mirror the blocking
-    # scenarios documented in COMPLIANCE.md; proprietary mode will add further
-    # branches here, so revisit extraction once that work has landed).
-    def run(self) -> dict:  # noqa: C901
+    # scenarios documented in COMPLIANCE.md; proprietary mode adds further
+    # branches here per that same documentation).
+    def run(self) -> tuple:  # noqa: C901
+        # pylint: disable=too-many-branches
         """
         Run the license checker.
 
+        In "opensource" mode, behavior is unchanged from before mode support
+        existed. In "proprietary" mode -- note that main.py passes the
+        canonical PERMISSIVE_LICENSES as self.permissive_licenses in this
+        mode, since a proprietary repo's own (absent) LICENSE file is not a
+        meaningful permissiveness baseline:
+
+        - Removing a proprietary marking is a blocking error, whatever
+          replaces it. This takes precedence over the permissive-addition
+          warning below: a diff that deletes the proprietary statement and
+          adds a permissive license in its place is still a removal of
+          proprietary marking, so it blocks. Removal counts even when the
+          marker is one component of a compound deleted expression.
+        - Adding a permissive OSS license to a file that was not carrying a
+          proprietary marking being removed (i.e. an unmarked file, or a file
+          keeping its proprietary marking) is a warning reminding the author
+          to update the repo's NOTICE file. Copyleft/unknown licenses are
+          unaffected and still block.
+        - A solitary proprietary-license detection on the added side is
+          expected for internal headers and raises no issue at all, instead
+          of the blocking error it is in opensource mode -- but only when the
+          change gives up no license of its own. Deleting a real license and
+          marking the file proprietary in its place is a relicensing of
+          third-party code and is still reported.
+        - A new source file with no detected license is not blocked if it
+          carries a copyright naming one of self.proprietary_entities (the
+          normal case for internal files). Otherwise it is still blocked,
+          with a message distinguishing "third-party, route to scan
+          team/legal" from "ours, needs a copyright marking" rather than the
+          generic opensource-mode message.
+
         Returns:
-            dict: A dictionary of flagged files.
+            tuple: A (flagged_files, warning_files) pair. flagged_files maps
+                path -> list of blocking issue strings; warning_files maps
+                path -> list of non-blocking issue strings.
         """
         source_files = [change for change in self.patch.changes if change["file_type"] == "source"]
 
         flagged_files = {}
+        warning_files = {}
         if not source_files:
-            return flagged_files
+            return flagged_files, warning_files
 
         license_results = self.detect_licenses_batch(source_files)
+        proprietary = self.mode == "proprietary"
 
         for idx, change in enumerate(source_files):
             added_licenses = license_results.get((idx, "added"), "")
             deleted_licenses = license_results.get((idx, "deleted"), "")
 
-            issues = []
-            if change["change_type"] == "MODIFIED" or change["change_type"] == "ADDED":
-                # Check if licenses changed
-                if added_licenses and deleted_licenses and added_licenses != deleted_licenses:
-                    # Only flag if the new license is NOT permissive
-                    # This allows dual-license scenarios like "BSD-3-Clause OR GPL-2.0-only"
-                    # where at least one option is permissive
-                    if not self.is_license_permissive(added_licenses):
-                        issues.append(
-                            f"License deleted: {deleted_licenses} and license added: {added_licenses}"  # noqa: E501
-                        )
-                elif added_licenses and not self.is_license_permissive(added_licenses):
-                    # New license added that is not permissive
-                    issues.append(f"Incompatible license added: {added_licenses}")
-                elif deleted_licenses and not added_licenses:
-                    # License was removed without replacement
-                    issues.append(f"License deleted: {deleted_licenses}")
+            proprietary_removed = proprietary and self._proprietary_marking_removed(
+                added_licenses, deleted_licenses
+            )
 
-                if issues:
-                    flagged_files[change["path_name"]] = issues
+            if proprietary and self._is_expected_internal_marking(added_licenses, deleted_licenses):
+                # Expected for internal Qualcomm headers; not an issue at all.
+                continue
+
+            if change["change_type"] in ("MODIFIED", "ADDED"):
+                self._classify_license_change(
+                    change,
+                    {
+                        "added": added_licenses,
+                        "deleted": deleted_licenses,
+                        "proprietary": proprietary,
+                        "proprietary_removed": proprietary_removed,
+                    },
+                    flagged_files,
+                    warning_files,
+                )
             if change["change_type"] == "ADDED":
                 if not added_licenses and self.is_source_file(change["path_name"]):
-                    issues.append(f"No license added for source file: {change['path_name']}")
-                    if issues:
-                        flagged_files[change["path_name"]] = issues
-        return flagged_files
+                    if not (
+                        proprietary
+                        and has_internal_copyright(change["content"], self.proprietary_entities)
+                    ):
+                        flagged_files.setdefault(change["path_name"], []).append(
+                            self._no_license_message(change["path_name"], proprietary)
+                        )
+        return flagged_files, warning_files
+
+    def _classify_license_change(
+        self, change: dict, license_info: dict, flagged_files: dict, warning_files: dict
+    ) -> None:
+        """
+        Classify a MODIFIED/ADDED change's license issues into flagged_files/warning_files.
+
+        In proprietary mode a retained proprietary marker is expected, not a
+        compatibility problem, so permissiveness is judged on the rest of the
+        expression. Otherwise "MIT AND <proprietary>" would fail the AND rule
+        (every component must be permissive) and block a change that is really
+        just permissive code added to a still-marked internal file.
+        """
+        added_licenses = license_info["added"]
+        deleted_licenses = license_info["deleted"]
+        proprietary = license_info["proprietary"]
+        proprietary_removed = license_info["proprietary_removed"]
+
+        added_for_permissiveness = (
+            self._without_proprietary_marker(added_licenses) if proprietary else added_licenses
+        )
+        added_is_permissive = bool(added_for_permissiveness) and self.is_license_permissive(
+            added_for_permissiveness
+        )
+
+        issues = []
+        warnings_for_file = []
+        if proprietary_removed:
+            issues.append(self._proprietary_removed_message(deleted_licenses))
+        elif proprietary and deleted_licenses and added_licenses == PROPRIETARY_LICENSE:
+            # A real license replaced by a bare proprietary marking: the same
+            # relicensing hazard as the generic "License deleted/added" message
+            # below, but naming the marker specifically rather than reporting
+            # it as though a different real license had been substituted.
+            issues.append(self._relicensed_as_proprietary_message(deleted_licenses))
+        # Check if licenses changed
+        elif added_licenses and deleted_licenses and added_licenses != deleted_licenses:
+            # Only flag if the new license is NOT permissive. This allows dual-license
+            # scenarios like "BSD-3-Clause OR GPL-2.0-only" where at least one option
+            # is permissive.
+            if not added_is_permissive:
+                message = f"License deleted: {deleted_licenses} and license added: {added_licenses}"  # noqa: E501
+                _route_license_message(message, added_licenses, issues, warnings_for_file)
+        elif added_licenses and not added_is_permissive:
+            # New license added that is not permissive
+            message = f"Incompatible license added: {added_licenses}"
+            _route_license_message(message, added_licenses, issues, warnings_for_file)
+        elif deleted_licenses and not added_licenses:
+            # License was removed without replacement
+            message = f"License deleted: {deleted_licenses}"
+            _route_license_message(message, deleted_licenses, issues, warnings_for_file)
+
+        # A permissive license newly appeared (as opposed to an unchanged license
+        # showing identically on both sides of the diff, e.g. from reformatting).
+        # In proprietary mode this warns about the NOTICE attribution obligation.
+        # Skipped when a proprietary marking was removed -- that is an error above,
+        # and warning about it too would muddy the report.
+        license_is_new_or_changed = added_licenses and added_licenses != deleted_licenses
+        if (
+            proprietary
+            and not proprietary_removed
+            and license_is_new_or_changed
+            and added_is_permissive
+        ):
+            warning_files.setdefault(change["path_name"], []).append(
+                self._notice_reminder(added_licenses)
+            )
+
+        if issues:
+            flagged_files[change["path_name"]] = issues
+        if warnings_for_file:
+            warning_files.setdefault(change["path_name"], []).extend(warnings_for_file)
+
+    @staticmethod
+    def _without_proprietary_marker(expression: str) -> str:
+        """
+        Drop the proprietary marker from an SPDX expression.
+
+        A retained proprietary marking is expected in proprietary mode, so it
+        must not count against the "all AND components must be permissive"
+        rule when judging whatever else the change added.
+
+        Args:
+            expression (str): An SPDX license expression, possibly compound.
+
+        Returns:
+            str: The expression's remaining components rejoined with " AND ",
+                or "" if the proprietary marker was the only component.
+        """
+        remaining = [
+            lic for lic in split_license_components(expression) if lic != PROPRIETARY_LICENSE
+        ]
+        return " AND ".join(remaining)
+
+    @classmethod
+    def _is_expected_internal_marking(cls, added_licenses: str, deleted_licenses: str) -> bool:
+        """
+        Check whether a change is no more than an internal marking appearing.
+
+        True when the added side is a solitary proprietary marker *and* the
+        deleted side gives up no license of its own -- the normal shape of a
+        change that adds, or merely reformats, an internal Qualcomm header.
+        That raises no issue at all in proprietary mode.
+
+        The deleted-side condition is what keeps this from swallowing a
+        relicensing: a diff that drops a real license (say MIT) and marks the
+        file proprietary in its place is a license change on third-party code,
+        and must still be reported rather than waved through as an expected
+        internal header.
+
+        Args:
+            added_licenses (str): SPDX expression detected on added lines.
+            deleted_licenses (str): SPDX expression detected on deleted lines.
+
+        Returns:
+            bool: True if the change is an expected internal marking.
+        """
+        if added_licenses != PROPRIETARY_LICENSE:
+            return False
+        return not cls._without_proprietary_marker(deleted_licenses)
+
+    @staticmethod
+    def _proprietary_marking_removed(added_licenses: str, deleted_licenses: str) -> bool:
+        """
+        Check whether a proprietary marking was removed by this change.
+
+        Component-level so that removing the marker from a compound
+        expression (e.g. "proprietary AND GPL-2.0-only") still counts.
+
+        Args:
+            added_licenses (str): SPDX expression detected on added lines.
+            deleted_licenses (str): SPDX expression detected on deleted lines.
+
+        Returns:
+            bool: True if the proprietary marker appears among the deleted
+                components but not among the added ones. A marker present on
+                both sides is unchanged (e.g. a reformatted header), not a
+                removal.
+        """
+        deleted_components = split_license_components(deleted_licenses)
+        if PROPRIETARY_LICENSE not in deleted_components:
+            return False
+        return PROPRIETARY_LICENSE not in split_license_components(added_licenses)
+
+    @staticmethod
+    def _proprietary_removed_message(deleted_licenses: str) -> str:
+        """
+        Build the blocking message for a removed proprietary marking.
+
+        Args:
+            deleted_licenses (str): The deleted SPDX license expression.
+
+        Returns:
+            str: A blocking error message.
+        """
+        return (
+            f"Proprietary license statement removed: {deleted_licenses} -- removing a "
+            "proprietary rights statement requires review; restore it, or route the "
+            "change to the scan team/legal if the file's status has genuinely changed."
+        )
+
+    @staticmethod
+    def _relicensed_as_proprietary_message(deleted_licenses: str) -> str:
+        """
+        Build the blocking message for a real license replaced by a bare
+        proprietary marking.
+
+        Distinct from _proprietary_removed_message: here the proprietary
+        marker is being *added*, not removed, but the deleted side still gave
+        up a real license -- e.g. deleting an MIT header and marking the file
+        proprietary in its place. Naming the marker directly is clearer than
+        the generic license-change message, since "license added:
+        LicenseRef-scancode-proprietary-license" reads as though some other
+        real license had been substituted rather than a proprietary claim.
+
+        Args:
+            deleted_licenses (str): The deleted SPDX license expression.
+
+        Returns:
+            str: A blocking error message.
+        """
+        return (
+            f"License deleted: {deleted_licenses} and license added: {PROPRIETARY_LICENSE} -- "
+            "a permissive license's attribution terms are not extinguished by marking the "
+            "file proprietary; restore the deleted license, or route the change to the scan "
+            "team/legal if the file's licensing has genuinely changed."
+        )
+
+    @staticmethod
+    def _notice_reminder(added_licenses: str) -> str:
+        """
+        Build the proprietary-mode warning for a permissive OSS addition.
+
+        Args:
+            added_licenses (str): The added SPDX license expression.
+
+        Returns:
+            str: A warning message reminding the author to update NOTICE.
+        """
+        return (
+            f"Permissive open-source license added: {added_licenses} -- review that this "
+            "third-party code is approved for inclusion, and update the repo's NOTICE file "
+            "with the required attribution."
+        )
+
+    @staticmethod
+    def _no_license_message(path_name: str, proprietary: bool) -> str:
+        """
+        Build the "no license detected on a new source file" message.
+
+        Args:
+            path_name (str): The path of the file with no detected license.
+            proprietary (bool): Whether the checker is running in
+                proprietary mode.
+
+        Returns:
+            str: In opensource mode, the original generic message. In
+                proprietary mode, a message distinguishing the two real
+                possibilities: unmarked third-party code (route to scan
+                team/legal, do not add a Qualcomm copyright) versus
+                unmarked Qualcomm-authored code (add the copyright marking).
+        """
+        if not proprietary:
+            return f"No license added for source file: {path_name}"
+        return (
+            f"No license or internal copyright found for source file: {path_name} -- "
+            "if this is third-party code, do NOT add a Qualcomm copyright; route it to "
+            "the scan team/legal for review. If this is Qualcomm-authored code, add the "
+            "appropriate copyright marking."
+        )
