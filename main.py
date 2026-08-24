@@ -360,7 +360,7 @@ def main() -> None:
     repo_license, allowed_licenses = resolve_allowed_licenses(args.mode, repo_name)
 
     license_checker = LicenseChecker(
-        patch, repo_name, allowed_licenses, mode=args.mode, proprietary_entities=internal_entities
+        patch, allowed_licenses, mode=args.mode, proprietary_entities=internal_entities
     )
     copyright_checker = CopyrightChecker(patch)
 

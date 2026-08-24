@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 from scanner.copyright_checker import DEFAULT_INTERNAL_ENTITIES, has_internal_copyright
+from scanner.file_types import SOURCE_EXTENSIONS
 from scanner.licenses import (
     PROPRIETARY_LICENSE,
     is_license_allowed,
@@ -38,7 +39,6 @@ class LicenseChecker:
     def __init__(
         self,
         patch: Patch,
-        repo: str,
         permissive_licenses: list,
         mode: str = "opensource",
         proprietary_entities: list | None = None,
@@ -48,7 +48,6 @@ class LicenseChecker:
 
         Args:
             patch (Patch): The patch file to check.
-            repo (str): The repository name.
             permissive_licenses (list): A list of permissive licenses.
             mode (str): "opensource" (default) or "proprietary". In
                 "opensource" mode, run() behavior is unchanged from before
@@ -58,7 +57,6 @@ class LicenseChecker:
                 scanner.copyright_checker.DEFAULT_INTERNAL_ENTITIES when None.
         """
         self.patch = patch
-        self.repo = repo
         self.permissive_licenses = permissive_licenses
         self.mode = mode
         self.proprietary_entities = (
@@ -158,29 +156,7 @@ class LicenseChecker:
         Returns:
             bool: True if the file is a source file, False otherwise.
         """
-        # Define common source file extensions
-        source_file_extensions = [
-            ".c",
-            ".cpp",
-            ".h",
-            ".hpp",
-            ".java",
-            ".py",
-            ".js",
-            ".ts",
-            ".rb",
-            ".go",
-            ".swift",
-            ".kt",
-            ".kts",
-            ".sh",
-        ]
-
-        # Check if the file extension is in the list of source file extensions
-        for ext in source_file_extensions:
-            if file_name.endswith(ext):
-                return True
-        return False
+        return file_name.endswith(SOURCE_EXTENSIONS)
 
     def run(self) -> tuple:
         """

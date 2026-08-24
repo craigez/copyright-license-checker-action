@@ -55,6 +55,19 @@ def has_internal_copyright(content: str, entities: list[str] | None = None) -> b
     return any(entity in line for line in copyright_lines for entity in entities)
 
 
+def normalize_string(s: str) -> str:
+    """
+    Normalize a string by removing non-alphabetic characters.
+
+    Args:
+        s (str): The string to normalize.
+
+    Returns:
+        str: The normalized string.
+    """
+    return "".join(filter(str.isalpha, s))
+
+
 class CopyrightChecker:
     """
     Class to check for copyright changes in a patch file.
@@ -68,18 +81,6 @@ class CopyrightChecker:
             patch (Patch): The patch file to check.
         """
         self.patch = patch
-
-    def normalize_string(self, s: str) -> str:
-        """
-        Normalize a string by removing non-alphabetic characters.
-
-        Args:
-            s (str): The string to normalize.
-
-        Returns:
-            str: The normalized string.
-        """
-        return "".join(filter(str.isalpha, s))
 
     def _check_allowed_transitions(
         self, deleted_copyrights_set: dict, added_copyrights: list
@@ -125,11 +126,11 @@ class CopyrightChecker:
             return [], []
 
         added_copyrights = [
-            (line[1:], self.normalize_string(line[1:]))
+            (line[1:], normalize_string(line[1:]))
             for line in re.findall(_ADDED_COPYRIGHT_PATTERN, content, re.MULTILINE)
         ]
         deleted_copyrights = [
-            (line[1:], self.normalize_string(line[1:]))
+            (line[1:], normalize_string(line[1:]))
             for line in re.findall(_DELETED_COPYRIGHT_PATTERN, content, re.MULTILINE)
         ]
         return added_copyrights, deleted_copyrights

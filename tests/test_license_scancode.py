@@ -101,7 +101,7 @@ class TestIsSourceFile(unittest.TestCase):
 
     def setUp(self):
         """Create a checker with an empty patch."""
-        self.checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
+        self.checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
 
     def test_known_source_extensions(self):
         """Recognized code extensions are source files."""
@@ -138,19 +138,18 @@ class TestLicenseCheckerModePlumbing(unittest.TestCase):
 
     def test_mode_defaults_to_opensource(self):
         """With no mode argument, the checker defaults to opensource."""
-        checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
+        checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
         self.assertEqual(checker.mode, "opensource")
 
     def test_proprietary_entities_defaults_to_module_default(self):
         """With no proprietary_entities argument, the module default is used."""
-        checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
+        checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
         self.assertEqual(checker.proprietary_entities, DEFAULT_INTERNAL_ENTITIES)
 
     def test_mode_and_entities_are_stored_when_provided(self):
         """Explicit mode/proprietary_entities arguments are stored as given."""
         checker = LicenseChecker(
             make_patch_obj([]),
-            "org/repo",
             PERMISSIVE,
             mode="proprietary",
             proprietary_entities=["Acme Robotics"],
@@ -165,7 +164,7 @@ class TestDetectLicensesBatch(ScancodeMockMixin, unittest.TestCase):
     def test_added_and_deleted_are_scanned_separately(self):
         """Added and deleted line groups get independent results."""
         self.install_scancode_mock({"0_added.txt": "MIT", "0_deleted.txt": "BSD-3-Clause"})
-        checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
+        checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
         results = checker.detect_licenses_batch(
             [make_change("+MIT license text\n-BSD license text\n")]
         )
@@ -175,13 +174,13 @@ class TestDetectLicensesBatch(ScancodeMockMixin, unittest.TestCase):
     def test_empty_content_is_skipped(self):
         """A change with no content produces no scan results."""
         self.install_scancode_mock({})
-        checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
+        checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
         self.assertEqual(checker.detect_licenses_batch([make_change(None)]), {})
 
     def test_no_detection_omits_entry(self):
         """A scanned file with no license detections yields a falsy result."""
         self.install_scancode_mock({"0_added.txt": None})
-        checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
+        checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
         results = checker.detect_licenses_batch([make_change("+just some code\n")])
         self.assertFalse(results.get((0, "added")))
 
@@ -196,7 +195,7 @@ class TestDetectLicensesBatch(ScancodeMockMixin, unittest.TestCase):
             Path(output_file).write_text(json.dumps({"files": []}), encoding="utf-8")
             return MagicMock(returncode=0)
 
-        checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
+        checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
         with mock_patch(
             "scanner.license_scancode.subprocess.run", side_effect=fake_run
         ) as run_mock:
@@ -228,7 +227,7 @@ class TestRunLicenseRules(ScancodeMockMixin, unittest.TestCase):
             behavior only).
         """
         self.install_scancode_mock(detections)
-        checker = LicenseChecker(make_patch_obj(changes), "org/repo", allowed or PERMISSIVE)
+        checker = LicenseChecker(make_patch_obj(changes), allowed or PERMISSIVE)
         flagged, _warnings = checker.run()
         return flagged
 
@@ -288,7 +287,7 @@ class TestRunLicenseRules(ScancodeMockMixin, unittest.TestCase):
 
     def test_no_source_files_returns_empty(self):
         """With no source changes, run() short-circuits."""
-        checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
+        checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
         self.assertEqual(checker.run(), ({}, {}))
 
     def test_run_returns_a_flagged_warning_tuple(self):
@@ -298,9 +297,7 @@ class TestRunLicenseRules(ScancodeMockMixin, unittest.TestCase):
         lands in flagged_files and warning_files stays empty.
         """
         self.install_scancode_mock({"0_added.txt": "GPL-2.0-only"})
-        checker = LicenseChecker(
-            make_patch_obj([make_change("+GPL text\n")]), "org/repo", PERMISSIVE
-        )
+        checker = LicenseChecker(make_patch_obj([make_change("+GPL text\n")]), PERMISSIVE)
         flagged, warnings = checker.run()
         self.assertIn("src/foo.c", flagged)
         self.assertEqual(warnings, {})
@@ -332,7 +329,6 @@ class TestRunProprietaryMode(ScancodeMockMixin, unittest.TestCase):
         self.install_scancode_mock(detections)
         checker = LicenseChecker(
             make_patch_obj(changes),
-            "org/repo",
             allowed or PERMISSIVE,
             mode="proprietary",
             proprietary_entities=entities,
@@ -442,7 +438,6 @@ class TestRunProprietaryMode(ScancodeMockMixin, unittest.TestCase):
         )
         checker = LicenseChecker(
             make_patch_obj([make_change("+MIT text\n-proprietary text\n")]),
-            "org/repo",
             PERMISSIVE,
             mode="opensource",
         )
@@ -504,7 +499,6 @@ class TestRunProprietaryMode(ScancodeMockMixin, unittest.TestCase):
         self.install_scancode_mock({"0_added.txt": None})
         checker = LicenseChecker(
             make_patch_obj([make_change("+int main(void) {}\n", change_type="ADDED")]),
-            "org/repo",
             PERMISSIVE,
             mode="opensource",
         )
@@ -524,7 +518,6 @@ class TestRunChangeTypeCoverageGaps(ScancodeMockMixin, unittest.TestCase):
         self.install_scancode_mock({"0_deleted.txt": "MIT"})
         checker = LicenseChecker(
             make_patch_obj([make_change("-MIT text\n", change_type="DELETED")]),
-            "org/repo",
             PERMISSIVE,
         )
         self.assertEqual(checker.run(), ({}, {}))
@@ -534,7 +527,6 @@ class TestRunChangeTypeCoverageGaps(ScancodeMockMixin, unittest.TestCase):
         self.install_scancode_mock({"0_deleted.txt": "MIT"})
         checker = LicenseChecker(
             make_patch_obj([make_change("-MIT text\n", change_type="RENAMED")]),
-            "org/repo",
             PERMISSIVE,
         )
         self.assertEqual(checker.run(), ({}, {}))
@@ -554,7 +546,6 @@ class TestLicenseComparisonFix(ScancodeMockMixin, unittest.TestCase):
         self.install_scancode_mock({"0_added.txt": "TIM", "0_deleted.txt": "MIT"})
         checker = LicenseChecker(
             make_patch_obj([make_change("+TIM text\n-MIT text\n")]),
-            "org/repo",
             PERMISSIVE,
         )
         flagged, _warnings = checker.run()

@@ -433,7 +433,7 @@ class TestMainEntryPoint(LicenseFileTestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     with self.assertRaises(SystemExit):
                         main.main()
-            self.assertEqual(license_cls.call_args[0][2], main.PERMISSIVE_LICENSES)
+            self.assertEqual(license_cls.call_args[0][1], main.PERMISSIVE_LICENSES)
 
     def test_copyleft_repo_gets_copyleft_allowed_list(self):
         """A copyleft repo license selects the copyleft allowed list."""
@@ -449,7 +449,7 @@ class TestMainEntryPoint(LicenseFileTestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     with self.assertRaises(SystemExit):
                         main.main()
-            self.assertEqual(license_cls.call_args[0][2], main.COPYLEFT_LICENSES)
+            self.assertEqual(license_cls.call_args[0][1], main.COPYLEFT_LICENSES)
 
     def test_compound_expression_is_parsed_into_components(self):
         """An unrecognized compound expression is split into its components."""
@@ -465,7 +465,7 @@ class TestMainEntryPoint(LicenseFileTestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     with self.assertRaises(SystemExit):
                         main.main()
-            self.assertEqual(license_cls.call_args[0][2], ["GPL-2.0-only", "MIT"])
+            self.assertEqual(license_cls.call_args[0][1], ["GPL-2.0-only", "MIT"])
 
     def test_proprietary_mode_skips_get_license(self):
         """
@@ -508,7 +508,7 @@ class TestMainEntryPoint(LicenseFileTestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     with self.assertRaises(SystemExit):
                         main.main()
-            self.assertEqual(license_cls.call_args[0][2], main.PERMISSIVE_LICENSES)
+            self.assertEqual(license_cls.call_args[0][1], main.PERMISSIVE_LICENSES)
             self.assertEqual(license_cls.call_args.kwargs["mode"], "proprietary")
 
     def test_proprietary_entities_are_resolved_and_passed_through(self):

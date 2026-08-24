@@ -13,6 +13,7 @@ from scanner.copyright_checker import (
     CopyrightChecker,
     DEFAULT_INTERNAL_ENTITIES,
     has_internal_copyright,
+    normalize_string,
 )
 
 
@@ -60,22 +61,18 @@ def make_change(
 class TestNormalizeString(unittest.TestCase):
     """normalize_string strips everything except alphabetic characters."""
 
-    def setUp(self):
-        """Create a checker with an empty patch."""
-        self.checker = CopyrightChecker(make_patch([]))
-
     def test_strips_digits_and_punctuation(self):
         """Years, punctuation and spaces are removed."""
         self.assertEqual(
-            self.checker.normalize_string("Copyright (c) 2024 Acme, Inc."),
+            normalize_string("Copyright (c) 2024 Acme, Inc."),
             "CopyrightcAcmeInc",
         )
 
     def test_years_do_not_affect_equality(self):
         """Two statements differing only by year normalize identically."""
         self.assertEqual(
-            self.checker.normalize_string("Copyright (c) 2019 Acme"),
-            self.checker.normalize_string("Copyright (c) 2024 Acme"),
+            normalize_string("Copyright (c) 2019 Acme"),
+            normalize_string("Copyright (c) 2024 Acme"),
         )
 
 
