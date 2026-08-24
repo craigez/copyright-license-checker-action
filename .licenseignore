@@ -9,3 +9,13 @@ main.py
 scanner/config.py
 scanner/license_scancode.py
 scanner/copyright_checker.py
+
+# Pure data (no license markers of its own), so a new-file-with-no-license
+# check would require adding a real SPDX header -- but this repo's own
+# LICENSE file is misclassified by scancode as
+# LicenseRef-scancode-proprietary-license (a false positive in scancode's
+# own proprietary-license_890.RULE, filed upstream), so a correct
+# BSD-3-Clause-Clear header gets flagged as "incompatible" against that
+# wrong baseline. Revisit once the upstream rule is fixed.
+scanner/file_types.py
+
