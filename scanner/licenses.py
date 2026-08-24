@@ -151,17 +151,18 @@ def is_copyleft(license_str: str) -> bool:
 # TODO: exceeds team max-complexity=10, branch count, and nesting depth
 # (SPDX expression evaluation covers AND/OR grouping plus GPL "-or-later"
 # compatibility).
-def is_license_allowed(expression: str, allowed_licenses: list) -> bool:  # noqa: C901
-    # pylint: disable=too-many-branches,too-many-nested-blocks
+def is_license_allowed(expression: str, allowed_licenses: list) -> bool:
+    # pylint: disable=too-many-nested-blocks
     """
     Check whether an SPDX license expression is allowed under allowed_licenses.
 
-    Special handling for dual-license scenarios:
-    - If expression starts with (X OR Y), we check if at least one option is allowed
-    - If the same licenses appear later with AND, we ignore them (they're from comments)
-
     For OR expressions: at least one option must be allowed.
-    For AND expressions: all components must be allowed.
+    For AND expressions: all components must be allowed. Applied uniformly
+    across the whole expression -- a leading OR group does not exempt the
+    rest of the expression from evaluation (see CODE_REVIEW.md's BUG-3: this
+    used to special-case a leading "(X OR Y) AND ..." and return as soon as
+    the OR group found an allowed option, silently ignoring everything after
+    the closing paren).
 
     Special GPL compatibility handling:
     - If allowed_licenses contains GPL-X.Y-or-later, GPL-X.Y-only and
@@ -176,23 +177,7 @@ def is_license_allowed(expression: str, allowed_licenses: list) -> bool:  # noqa
     Returns:
         bool: True if the license expression is allowed, False otherwise.
     """
-    expression = expression.strip()
-
-    # Check if this is a dual-license pattern: starts with (X OR Y) AND ...
-    # In this case, if the OR part has an allowed option, we accept it
-    if expression.startswith("(") and " OR " in expression.split(")")[0]:
-        or_part = expression.split(")")[0] + ")"
-        or_part_clean = or_part.strip("()")
-        or_licenses = [lic.strip() for lic in or_part_clean.split(" OR ")]
-
-        for lic in or_licenses:
-            if lic in allowed_licenses:
-                return True
-
-        return False
-
-    # Standard evaluation: split by AND first to get AND-groups
-    and_groups = [group.strip() for group in expression.split(" AND ")]
+    and_groups = [group.strip() for group in expression.strip().split(" AND ")]
 
     for and_group in and_groups:
         if " OR " in and_group:

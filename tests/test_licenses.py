@@ -93,16 +93,18 @@ class TestIsLicenseAllowed(unittest.TestCase):
             is_license_allowed("MIT AND (GPL-2.0-only OR GPL-3.0-only)", PERMISSIVE_LICENSES)
         )
 
-    def test_leading_or_group_short_circuits(self):
+    def test_leading_or_group_does_not_exempt_the_rest_of_the_expression(self):
         """
-        A leading '(X OR Y) AND ...' dual-license expression is decided solely by
-        the leading OR group; trailing AND terms are treated as comment noise.
-
-        Pins current (known-buggy) behavior -- see CODE_REVIEW.md's BUG-3.
-        Step 4 fixes this to evaluate the whole expression uniformly.
+        BUG-3 (fixed): a leading '(X OR Y) AND Z' dual-license expression is
+        now evaluated uniformly, so a trailing incompatible component still
+        fails the check -- it is no longer decided solely by the leading OR
+        group, treating everything after it as comment noise to ignore.
         """
-        self.assertTrue(
+        self.assertFalse(
             is_license_allowed("(MIT OR GPL-2.0-only) AND GPL-3.0-only", PERMISSIVE_LICENSES)
+        )
+        self.assertTrue(
+            is_license_allowed("(MIT OR GPL-2.0-only) AND Apache-2.0", PERMISSIVE_LICENSES)
         )
 
     def test_unknown_license_is_not_allowed(self):
