@@ -131,10 +131,42 @@ def get_license(repo_name: str) -> str:
     return "BSD-3-Clause-Clear"
 
 
-# TODO: exceeds team max-complexity=10 (report formatting mirrors COMPLIANCE.md
-# scenarios 1:1 across blocking/warning sections; revisit extraction after
-# proprietary mode lands and adds more branches).
-def beautify_output(  # noqa: C901  pylint: disable=too-many-branches
+def _render_issue_section(output: list, log_prefix: str, files: dict, labels: dict) -> None:
+    """
+    Append one report section (blocking errors or warnings) to output.
+
+    Args:
+        output (list): The report's lines so far; appended to in place.
+        log_prefix (str): The prefix to use for logging.
+        files (dict): path -> {"license_issues": [...], "copyright_issues": [...]}.
+        labels (dict): "title" (section header line), "license" and
+            "copyright" (the per-file "├─ ..." lines introducing each issue
+            type) -- bundled together since they are set-once literals for a
+            given section, not independently varying arguments.
+    """
+    if not files:
+        return
+    output.append(f"{log_prefix} │")
+    output.append(f"{log_prefix} │ ═══════════════════════════════════════════")
+    output.append(f"{log_prefix} │ {labels['title']}")
+    output.append(f"{log_prefix} │ ═══════════════════════════════════════════")
+    for file, issues in files.items():
+        output.append(f"{log_prefix} │")
+        output.append(f"{log_prefix} │ ┌─ 📄 F I L E: {file}")
+        if issues["license_issues"]:
+            output.append(f"{log_prefix} │ │")
+            output.append(f"{log_prefix} │ ├─ {labels['license']}")
+            for issue in issues["license_issues"]:
+                output.append(f"{log_prefix} │ │  • {issue}")
+        if issues["copyright_issues"]:
+            output.append(f"{log_prefix} │ │")
+            output.append(f"{log_prefix} │ ├─ {labels['copyright']}")
+            for issue in issues["copyright_issues"]:
+                output.append(f"{log_prefix} │ │  • {issue}")
+        output.append(f"{log_prefix} │ └─────────────────────────────────────────")
+
+
+def beautify_output(
     flagged_files: dict, warning_files: dict, _license: str, log_prefix: str
 ) -> None:
     """
@@ -169,47 +201,26 @@ def beautify_output(  # noqa: C901  pylint: disable=too-many-branches
     )
     output.append(f"{log_prefix} ├───────────────────────────────────────────┤")
 
-    # Print blocking errors first
-    if flagged_files:
-        output.append(f"{log_prefix} │")
-        output.append(f"{log_prefix} │ ═══════════════════════════════════════════")
-        output.append(f"{log_prefix} │ 🚨  B L O C K I N G   E R R O R S")
-        output.append(f"{log_prefix} │ ═══════════════════════════════════════════")
-        for file, issues in flagged_files.items():
-            output.append(f"{log_prefix} │")
-            output.append(f"{log_prefix} │ ┌─ 📄 F I L E: {file}")
-            if issues["license_issues"]:
-                output.append(f"{log_prefix} │ │")
-                output.append(f"{log_prefix} │ ├─ 🚨 LICENSE ISSUES:")
-                for issue in issues["license_issues"]:
-                    output.append(f"{log_prefix} │ │  • {issue}")
-            if issues["copyright_issues"]:
-                output.append(f"{log_prefix} │ │")
-                output.append(f"{log_prefix} │ ├─ 🚨 COPYRIGHT ISSUES:")
-                for issue in issues["copyright_issues"]:
-                    output.append(f"{log_prefix} │ │  • {issue}")
-            output.append(f"{log_prefix} │ └─────────────────────────────────────────")
-
-    # Print warnings (non-blocking)
-    if warning_files:
-        output.append(f"{log_prefix} │")
-        output.append(f"{log_prefix} │ ═══════════════════════════════════════════")
-        output.append(f"{log_prefix} │ ⚠️   W A R N I N G S  (Non-blocking)")
-        output.append(f"{log_prefix} │ ═══════════════════════════════════════════")
-        for file, issues in warning_files.items():
-            output.append(f"{log_prefix} │")
-            output.append(f"{log_prefix} │ ┌─ 📄 F I L E: {file}")
-            if issues["license_issues"]:
-                output.append(f"{log_prefix} │ │")
-                output.append(f"{log_prefix} │ ├─ ⚠️  LICENSE WARNINGS:")
-                for issue in issues["license_issues"]:
-                    output.append(f"{log_prefix} │ │  • {issue}")
-            if issues["copyright_issues"]:
-                output.append(f"{log_prefix} │ │")
-                output.append(f"{log_prefix} │ ├─ ⚠️  COPYRIGHT WARNINGS:")
-                for issue in issues["copyright_issues"]:
-                    output.append(f"{log_prefix} │ │  • {issue}")
-            output.append(f"{log_prefix} │ └─────────────────────────────────────────")
+    _render_issue_section(
+        output,
+        log_prefix,
+        flagged_files,
+        {
+            "title": "🚨  B L O C K I N G   E R R O R S",
+            "license": "🚨 LICENSE ISSUES:",
+            "copyright": "🚨 COPYRIGHT ISSUES:",
+        },
+    )
+    _render_issue_section(
+        output,
+        log_prefix,
+        warning_files,
+        {
+            "title": "⚠️   W A R N I N G S  (Non-blocking)",
+            "license": "⚠️  LICENSE WARNINGS:",
+            "copyright": "⚠️  COPYRIGHT WARNINGS:",
+        },
+    )
 
     output.append(f"{log_prefix} └───────────────────────────────────────────┘")
 
@@ -269,54 +280,56 @@ def resolve_internal_entities(proprietary_entities: str) -> list:
     return DEFAULT_INTERNAL_ENTITIES + extra
 
 
-# TODO: exceeds team max-complexity=10, branch count, and local-variable count
-# (orchestrates license resolution, both checkers, and issue routing; revisit
-# extraction after proprietary mode lands and adds the mode-dispatch branches).
-def main() -> None:  # noqa: C901
-    # pylint: disable=too-many-branches,too-many-locals
+def resolve_allowed_licenses(mode: str, repo_name: str) -> tuple:
     """
-    The main function of the script.
+    Resolve the repo's license and the allowed-license baseline for mode.
+
+    Args:
+        mode (str): "opensource" or "proprietary".
+        repo_name (str): The name of the repository.
+
+    Returns:
+        tuple: (repo_license, allowed_licenses). In proprietary mode,
+            repo_license is the literal string "proprietary" and
+            allowed_licenses is the canonical PERMISSIVE_LICENSES list --
+            proprietary repos are expected to have no LICENSE file, so
+            scanning for one would only produce misleading "Found license
+            file" / "Using default license" log noise, and permissiveness
+            in this mode is judged against the canonical list directly
+            (see LicenseChecker.run()).
     """
-    # Clamp chatty logging from license_identifier
-    logging.basicConfig(level=logging.WARNING)
+    if mode == "proprietary":
+        return "proprietary", PERMISSIVE_LICENSES
 
-    args = parse_args(sys.argv[1:])
-    patch = Patch(args.patch_file)
-    repo_name = args.repo_name
-    internal_entities = resolve_internal_entities(args.proprietary_entities)
+    repo_license = get_license(repo_name)
+    if repo_license in PERMISSIVE_LICENSES:
+        return repo_license, PERMISSIVE_LICENSES
+    if is_copyleft(repo_license):
+        return repo_license, COPYLEFT_LICENSES
 
-    if args.mode == "proprietary":
-        # Proprietary repos are expected to have no LICENSE file; scanning for
-        # one only produces misleading "Found license file" / "Using default
-        # license" log noise. Permissiveness in this mode is judged against
-        # the canonical list directly (see LicenseChecker.run()).
-        repo_license = "proprietary"
-        allowed_licenses = PERMISSIVE_LICENSES
-    else:
-        repo_license = get_license(repo_name)
-        if repo_license in PERMISSIVE_LICENSES:
-            allowed_licenses = PERMISSIVE_LICENSES
-        elif is_copyleft(repo_license):
-            allowed_licenses = COPYLEFT_LICENSES
-        else:
-            # Handle complex license expressions (e.g., "GPL-2.0-only AND GPL-2.0-or-later")
-            allowed_licenses = split_license_components(repo_license)
+    # Handle complex license expressions (e.g., "GPL-2.0-only AND GPL-2.0-or-later")
+    allowed_licenses = split_license_components(repo_license)
+    # If no licenses were parsed, use the original license
+    return repo_license, allowed_licenses or [repo_license]
 
-            # If no licenses were parsed, use the original license
-            if not allowed_licenses:
-                allowed_licenses = [repo_license]
 
-    license_checker = LicenseChecker(
-        patch, repo_name, allowed_licenses, mode=args.mode, proprietary_entities=internal_entities
-    )
-    copyright_checker = CopyrightChecker(patch)
+def _route_issues(
+    flagged_license_files: dict, checker_warning_files: dict, flagged_copyright_files: dict
+) -> tuple:
+    """
+    Combine license/copyright checker output into the report's file->issues shape.
 
-    flagged_license_files, checker_warning_files = license_checker.run()
-    flagged_copyright_files = copyright_checker.run()
+    Args:
+        flagged_license_files (dict): path -> blocking license issues.
+        checker_warning_files (dict): path -> non-blocking license issues.
+        flagged_copyright_files (dict): path -> blocking copyright issues.
 
-    # Combine flagged files and their issues, separating errors from warnings
-    flagged_files = {}  # Blocking errors
-    warning_files = {}  # Non-blocking warnings
+    Returns:
+        tuple: (flagged_files, warning_files), each mapping
+            path -> {"license_issues": [...], "copyright_issues": [...]}.
+    """
+    flagged_files = {}
+    warning_files = {}
 
     for file, issues in checker_warning_files.items():
         warning_files[file] = {"license_issues": list(issues), "copyright_issues": []}
@@ -329,6 +342,33 @@ def main() -> None:  # noqa: C901
             flagged_files[file]["copyright_issues"] = issues
         else:
             flagged_files[file] = {"license_issues": [], "copyright_issues": issues}
+
+    return flagged_files, warning_files
+
+
+def main() -> None:
+    """
+    The main function of the script.
+    """
+    # Clamp chatty logging from license_identifier
+    logging.basicConfig(level=logging.WARNING)
+
+    args = parse_args(sys.argv[1:])
+    patch = Patch(args.patch_file)
+    repo_name = args.repo_name
+    internal_entities = resolve_internal_entities(args.proprietary_entities)
+    repo_license, allowed_licenses = resolve_allowed_licenses(args.mode, repo_name)
+
+    license_checker = LicenseChecker(
+        patch, repo_name, allowed_licenses, mode=args.mode, proprietary_entities=internal_entities
+    )
+    copyright_checker = CopyrightChecker(patch)
+
+    flagged_license_files, checker_warning_files = license_checker.run()
+    flagged_copyright_files = copyright_checker.run()
+    flagged_files, warning_files = _route_issues(
+        flagged_license_files, checker_warning_files, flagged_copyright_files
+    )
 
     beautify_output(flagged_files, warning_files, repo_license, LOG_PREFIX)
 

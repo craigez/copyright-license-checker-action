@@ -148,9 +148,11 @@ def is_copyleft(license_str: str) -> bool:
     return license_str in COPYLEFT_LICENSES
 
 
-# TODO: exceeds team max-complexity=10, branch count, and nesting depth
-# (SPDX expression evaluation covers AND/OR grouping plus GPL "-or-later"
-# compatibility).
+# Exceeds team max-complexity=10, branch count, and nesting depth: SPDX
+# expression evaluation covers AND/OR grouping plus GPL "-or-later"
+# compatibility. Simplifying this further is blocked on the open question in
+# #6 (the leading-OR-group short-circuit this evaluates around) -- revisit
+# once that's resolved, not on a generic "after proprietary mode" timeline.
 def is_license_allowed(expression: str, allowed_licenses: list) -> bool:  # noqa: C901
     # pylint: disable=too-many-branches,too-many-nested-blocks
     """

@@ -65,10 +65,11 @@ class LicenseChecker:
             proprietary_entities if proprietary_entities is not None else DEFAULT_INTERNAL_ENTITIES
         )
 
-    # TODO: exceeds team max-complexity=10 and local-variable count (batches
+    # Exceeds team max-complexity=10 and local-variable count: batches
     # added/deleted line groups across all changes into one scancode
-    # invocation; revisit extraction if proprietary mode needs to change how
-    # content is batched).
+    # invocation. Proprietary mode landed without needing to change this
+    # batching (see PERF-3 in CODE_REVIEW.md) -- kept as-is; splitting it
+    # would risk losing the single-subprocess-call guarantee this exists for.
     def detect_licenses_batch(self, changes: list) -> dict:  # noqa: C901
         # pylint: disable=too-many-locals
         """
@@ -181,11 +182,7 @@ class LicenseChecker:
                 return True
         return False
 
-    # TODO: exceeds team max-complexity=10 (rule branches mirror the blocking
-    # scenarios documented in COMPLIANCE.md; proprietary mode adds further
-    # branches here per that same documentation).
-    def run(self) -> tuple:  # noqa: C901
-        # pylint: disable=too-many-branches
+    def run(self) -> tuple:
         """
         Run the license checker.
 
@@ -259,15 +256,34 @@ class LicenseChecker:
                     warning_files,
                 )
             if change["change_type"] == "ADDED":
-                if not added_licenses and self.is_source_file(change["path_name"]):
-                    if not (
-                        proprietary
-                        and has_internal_copyright(change["content"], self.proprietary_entities)
-                    ):
-                        flagged_files.setdefault(change["path_name"], []).append(
-                            self._no_license_message(change["path_name"], proprietary)
-                        )
+                no_license_message = self._check_new_file_license(
+                    change, added_licenses, proprietary
+                )
+                if no_license_message:
+                    flagged_files.setdefault(change["path_name"], []).append(no_license_message)
         return flagged_files, warning_files
+
+    def _check_new_file_license(
+        self, change: dict, added_licenses: str, proprietary: bool
+    ) -> str | None:
+        """
+        Check a newly-added source file for a missing license.
+
+        Args:
+            change (dict): The ADDED change under consideration.
+            added_licenses (str): SPDX expression detected on the added lines.
+            proprietary (bool): Whether the checker is running in proprietary mode.
+
+        Returns:
+            str | None: A blocking message if the file has no detected
+                license and (in proprietary mode) no internal copyright
+                either; None if the file should raise no issue.
+        """
+        if added_licenses or not self.is_source_file(change["path_name"]):
+            return None
+        if proprietary and has_internal_copyright(change["content"], self.proprietary_entities):
+            return None
+        return self._no_license_message(change["path_name"], proprietary)
 
     def _classify_license_change(
         self, change: dict, license_info: dict, flagged_files: dict, warning_files: dict

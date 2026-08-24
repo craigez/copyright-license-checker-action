@@ -185,6 +185,30 @@ class TestDetectLicensesBatch(ScancodeMockMixin, unittest.TestCase):
         results = checker.detect_licenses_batch([make_change("+just some code\n")])
         self.assertFalse(results.get((0, "added")))
 
+    def test_multiple_changes_share_a_single_subprocess_call(self):
+        """
+        All changes are batched into one scancode invocation (PERF-3), not
+        one subprocess.run per change -- the expensive part of this tool.
+        """
+
+        def fake_run(cmd, **_kwargs):
+            output_file = cmd[cmd.index("--json-pp") + 1]
+            Path(output_file).write_text(json.dumps({"files": []}), encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
+        with mock_patch(
+            "scanner.license_scancode.subprocess.run", side_effect=fake_run
+        ) as run_mock:
+            checker.detect_licenses_batch(
+                [
+                    make_change("+MIT text\n"),
+                    make_change("+Apache text\n"),
+                    make_change("-BSD text\n"),
+                ]
+            )
+        self.assertEqual(run_mock.call_count, 1)
+
 
 class TestRunLicenseRules(ScancodeMockMixin, unittest.TestCase):
     """End-to-end rule evaluation in run()."""
