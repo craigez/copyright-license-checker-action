@@ -17,10 +17,14 @@ tests/**
 # - scanner/copyright_checker.py: holds the QUIC -> QTI copyright transition
 #   strings and DEFAULT_INTERNAL_ENTITIES verbatim, which read as copyright
 #   changes whenever this file itself changes.
+# - .licenseignore (this file): explaining the exclusions above means naming
+#   real SPDX identifiers as examples, which trips the same false positive
+#   -- confirmed the hard way, when this comment block itself got flagged.
 main.py
 scanner/config.py
 scanner/license_scancode.py
 scanner/copyright_checker.py
+.licenseignore
 
 # Pure data (no license markers of its own), so a new-file-with-no-license
 # check would require adding a real SPDX header -- but this repo's own
