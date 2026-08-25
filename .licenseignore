@@ -4,7 +4,19 @@ tests/**
 
 # These files' own content (SPDX identifiers, license names, and example
 # license text used for detection/testing logic) is mistaken by scancode for
-# an added license.
+# an added license. Narrowing this list depends on the scancode-toolkit
+# version bump (separate branch) -- 32.2.1's matcher is prone to exactly this
+# kind of false positive; re-check each file below once that lands.
+#
+# - main.py, scanner/license_scancode.py: docstrings extensively name real
+#   SPDX identifiers (BSD-3-Clause-Clear, MIT, GPL-2.0, LicenseRef-scancode-*)
+#   to document the proprietary-mode rules; this is prose, not data that
+#   moved anywhere in Step 3.
+# - scanner/config.py: a project-name -> license-string mapping table; the
+#   license identifiers are the file's entire content, not incidental data.
+# - scanner/copyright_checker.py: holds the QUIC -> QTI copyright transition
+#   strings and DEFAULT_INTERNAL_ENTITIES verbatim, which read as copyright
+#   changes whenever this file itself changes.
 main.py
 scanner/config.py
 scanner/license_scancode.py

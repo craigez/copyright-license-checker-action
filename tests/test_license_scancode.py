@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch as mock_patch
 from scanner.copyright_checker import DEFAULT_INTERNAL_ENTITIES
 from scanner.license_scancode import LicenseChecker
 from scanner.licenses import PROPRIETARY_LICENSE
+from tests.scancode_mock import scancode_mock_patcher
 
 PERMISSIVE = [
     "BSD-3-Clause",
@@ -77,21 +78,7 @@ class ScancodeMockMixin:
             detections: Maps scanned filename (e.g. '0_added.txt') to either an
                 SPDX expression string, or None for 'no license detected'.
         """
-
-        def fake_run(cmd, **_kwargs):
-            output_file = cmd[cmd.index("--json-pp") + 1]
-            files = []
-            for filename, expression in detections.items():
-                entry = {"path": filename, "type": "file", "license_detections": []}
-                if expression is not None:
-                    entry["license_detections"] = [{"license_expression_spdx": expression}]
-                files.append(entry)
-            # scancode also reports the containing directory; run() must skip it.
-            files.append({"path": ".", "type": "directory", "license_detections": []})
-            Path(output_file).write_text(json.dumps({"files": files}), encoding="utf-8")
-            return MagicMock(returncode=0)
-
-        patcher = mock_patch("scanner.license_scancode.subprocess.run", side_effect=fake_run)
+        patcher = scancode_mock_patcher(detections)
         patcher.start()
         self.addCleanup(patcher.stop)
 
