@@ -45,6 +45,30 @@ jobs:
 
 ```
 
+### Inputs
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `patch_file` | *(required)* | Path to the patch file to check. |
+| `repo_name` | *(required)* | The name of the GitHub repository. |
+| `mode` | `opensource` | `opensource` or `proprietary`. See [Proprietary Mode](COMPLIANCE.md#proprietary-mode) for details on how this changes the rules. |
+| `proprietary_entities` | *(empty)* | Comma-separated extra copyright-holder strings treated as internal authorship in `proprietary` mode, in addition to the built-in Qualcomm defaults. |
+
+### Checking a proprietary codebase
+
+If you're checking an internally-developed proprietary codebase rather than an open-source repository, set `mode: proprietary`:
+
+```yml
+      - name: Run copyright/license detector
+        uses: qualcomm/copyright-license-checker-action@main
+        with:
+          patch_file: pr.patch
+          repo_name: ${{ github.repository }}
+          mode: proprietary
+```
+
+In this mode, Qualcomm-authored files are expected to carry a proprietary rights statement rather than an OSS license, vendored permissive open-source code is allowed but warns for review, and the repository is expected to have no `LICENSE` file. See [Proprietary Mode](COMPLIANCE.md#proprietary-mode) in the compliance documentation for the full set of differences.
+
 ## Scenarios Covered
 ### License Detection
 This action detects licenses in the code changes and ensures that any added licenses are permissive and compliant with the repository's policies.
@@ -58,13 +82,15 @@ The action checks for any changes in copyright statements within the code and fl
 The action identifies source files based on their extensions and ensures that appropriate licenses are added to new source files as per repository's policies
 
 ```text
-'.c', '.cpp', '.h', '.hpp', '.java', '.py', '.js', '.ts', '.rb', '.go', '.swift', '.kt', '.kts'
+'.c', '.cpp', '.h', '.hpp', '.java', '.py', '.js', '.ts', '.rb', '.go', '.swift', '.kt', '.kts', '.sh'
 ```
 
 **Excluded File Types**: The following file types are automatically excluded from all license and copyright checks:
 - `.md` (Markdown documentation files)
 - `.patch` (Patch files)
 - `.bb` (BitBake recipe files)
+- `.json` (JSON files)
+- `.yml` (YAML files)
 
 ### Compliance Reporting
 The action provides a detailed report with two categories:

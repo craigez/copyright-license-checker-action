@@ -1,3 +1,4 @@
+import argparse
 import logging
 import sys
 import os
@@ -7,55 +8,15 @@ import tempfile
 from scanner import config
 from scanner.patch import Patch
 from scanner.license_scancode import LicenseChecker
-from scanner.copyright_checker import CopyrightChecker
+from scanner.licenses import (
+    COPYLEFT_LICENSES,
+    PERMISSIVE_LICENSES,
+    is_copyleft,
+    split_license_components,
+)
+from scanner.copyright_checker import CopyrightChecker, DEFAULT_INTERNAL_ENTITIES
 
 LOG_PREFIX = "< file license/copyright check >"
-
-# Define a dictionary of permissive licenses
-PERMISSIVE_LICENSES = [
-    "BSD-3-Clause",
-    "MIT",
-    "Apache-1.0",
-    "Apache-1.1",
-    "Apache-2.0",
-    "BSD-3-Clause-Clear",
-    "FreeBSD-DOC",
-    "Zlib",
-    "BSD-1-Clause",
-    "BSD-2-Clause",
-    "BSD-2-Clause-first-lines",
-    "BSD-2-Clause-Views",
-    "BSD-3-Clause-Sun",
-    "BSD-4-Clause-Shortened",
-    "BSD-3-Clause-Attribution",
-    "BSD-4-Clause",
-    "ISC",
-    "CC0-1.0",
-    "ICU",
-    "LicenseRef-scancode-unicode",
-    "Apache-2.0 WITH LLVM-exception",
-    "Apache-2.0 WITH LLVM-exception AND Apache-2.0 AND LLVM-exception",
-]
-
-COPYLEFT_LICENSES = [
-    "GPL-1.0-only",
-    "GPL-1.0-or-later",
-    "GPL-2.0-only",
-    "GPL-2.0-or-later",
-    "GPL-3.0-only",
-    "GPL-3.0",
-    "GPL-3.0-or-later",
-    "AGPL-3.0",
-    "LGPL-3.0",
-    "GPL-2.0",
-    "GPL-2.0+",
-    "GPL-2.0-only WITH Linux-syscall-note",
-    "AGPL-1.0-only",
-    "AGPL-1.0-or-later",
-    "LicenseRef-scancode-agpl-2.0",
-    "AGPL-3.0-only",
-    "AGPL-3.0-or-later",
-]
 
 
 def detect_license_from_file(license_file_path: str) -> str:
@@ -170,10 +131,42 @@ def get_license(repo_name: str) -> str:
     return "BSD-3-Clause-Clear"
 
 
-# TODO: exceeds team max-complexity=10 (report formatting mirrors COMPLIANCE.md
-# scenarios 1:1 across blocking/warning sections; revisit extraction after
-# proprietary mode lands and adds more branches).
-def beautify_output(  # noqa: C901  pylint: disable=too-many-branches
+def _render_issue_section(output: list, log_prefix: str, files: dict, labels: dict) -> None:
+    """
+    Append one report section (blocking errors or warnings) to output.
+
+    Args:
+        output (list): The report's lines so far; appended to in place.
+        log_prefix (str): The prefix to use for logging.
+        files (dict): path -> {"license_issues": [...], "copyright_issues": [...]}.
+        labels (dict): "title" (section header line), "license" and
+            "copyright" (the per-file "├─ ..." lines introducing each issue
+            type) -- bundled together since they are set-once literals for a
+            given section, not independently varying arguments.
+    """
+    if not files:
+        return
+    output.append(f"{log_prefix} │")
+    output.append(f"{log_prefix} │ ═══════════════════════════════════════════")
+    output.append(f"{log_prefix} │ {labels['title']}")
+    output.append(f"{log_prefix} │ ═══════════════════════════════════════════")
+    for file, issues in files.items():
+        output.append(f"{log_prefix} │")
+        output.append(f"{log_prefix} │ ┌─ 📄 F I L E: {file}")
+        if issues["license_issues"]:
+            output.append(f"{log_prefix} │ │")
+            output.append(f"{log_prefix} │ ├─ {labels['license']}")
+            for issue in issues["license_issues"]:
+                output.append(f"{log_prefix} │ │  • {issue}")
+        if issues["copyright_issues"]:
+            output.append(f"{log_prefix} │ │")
+            output.append(f"{log_prefix} │ ├─ {labels['copyright']}")
+            for issue in issues["copyright_issues"]:
+                output.append(f"{log_prefix} │ │  • {issue}")
+        output.append(f"{log_prefix} │ └─────────────────────────────────────────")
+
+
+def beautify_output(
     flagged_files: dict, warning_files: dict, _license: str, log_prefix: str
 ) -> None:
     """
@@ -208,47 +201,26 @@ def beautify_output(  # noqa: C901  pylint: disable=too-many-branches
     )
     output.append(f"{log_prefix} ├───────────────────────────────────────────┤")
 
-    # Print blocking errors first
-    if flagged_files:
-        output.append(f"{log_prefix} │")
-        output.append(f"{log_prefix} │ ═══════════════════════════════════════════")
-        output.append(f"{log_prefix} │ 🚨  B L O C K I N G   E R R O R S")
-        output.append(f"{log_prefix} │ ═══════════════════════════════════════════")
-        for file, issues in flagged_files.items():
-            output.append(f"{log_prefix} │")
-            output.append(f"{log_prefix} │ ┌─ 📄 F I L E: {file}")
-            if issues["license_issues"]:
-                output.append(f"{log_prefix} │ │")
-                output.append(f"{log_prefix} │ ├─ 🚨 LICENSE ISSUES:")
-                for issue in issues["license_issues"]:
-                    output.append(f"{log_prefix} │ │  • {issue}")
-            if issues["copyright_issues"]:
-                output.append(f"{log_prefix} │ │")
-                output.append(f"{log_prefix} │ ├─ 🚨 COPYRIGHT ISSUES:")
-                for issue in issues["copyright_issues"]:
-                    output.append(f"{log_prefix} │ │  • {issue}")
-            output.append(f"{log_prefix} │ └─────────────────────────────────────────")
-
-    # Print warnings (non-blocking)
-    if warning_files:
-        output.append(f"{log_prefix} │")
-        output.append(f"{log_prefix} │ ═══════════════════════════════════════════")
-        output.append(f"{log_prefix} │ ⚠️   W A R N I N G S  (Non-blocking)")
-        output.append(f"{log_prefix} │ ═══════════════════════════════════════════")
-        for file, issues in warning_files.items():
-            output.append(f"{log_prefix} │")
-            output.append(f"{log_prefix} │ ┌─ 📄 F I L E: {file}")
-            if issues["license_issues"]:
-                output.append(f"{log_prefix} │ │")
-                output.append(f"{log_prefix} │ ├─ ⚠️  LICENSE WARNINGS:")
-                for issue in issues["license_issues"]:
-                    output.append(f"{log_prefix} │ │  • {issue}")
-            if issues["copyright_issues"]:
-                output.append(f"{log_prefix} │ │")
-                output.append(f"{log_prefix} │ ├─ ⚠️  COPYRIGHT WARNINGS:")
-                for issue in issues["copyright_issues"]:
-                    output.append(f"{log_prefix} │ │  • {issue}")
-            output.append(f"{log_prefix} │ └─────────────────────────────────────────")
+    _render_issue_section(
+        output,
+        log_prefix,
+        flagged_files,
+        {
+            "title": "🚨  B L O C K I N G   E R R O R S",
+            "license": "🚨 LICENSE ISSUES:",
+            "copyright": "🚨 COPYRIGHT ISSUES:",
+        },
+    )
+    _render_issue_section(
+        output,
+        log_prefix,
+        warning_files,
+        {
+            "title": "⚠️   W A R N I N G S  (Non-blocking)",
+            "license": "⚠️  LICENSE WARNINGS:",
+            "copyright": "⚠️  COPYRIGHT WARNINGS:",
+        },
+    )
 
     output.append(f"{log_prefix} └───────────────────────────────────────────┘")
 
@@ -256,133 +228,147 @@ def beautify_output(  # noqa: C901  pylint: disable=too-many-branches
     print("\n".join(output))
 
 
-# TODO: exceeds team max-complexity=10 (classification branches map directly to
-# the warning-vs-error rules documented in COMPLIANCE.md; revisit extraction
-# after proprietary mode lands and adds more branches).
-def is_uncertain_license_issue(issue: str) -> bool:  # noqa: C901
+def parse_args(argv: list) -> argparse.Namespace:
     """
-    Check if a license issue is ONLY related to uncertain/unknown licenses.
-    Only treats it as a warning if the unknown license is the sole problem.
-    If there are other incompatible licenses, it remains a blocking error.
-
-    Special case: If the ONLY license is exactly "LicenseRef-scancode-proprietary-license",
-    it's a blocking error. If mixed with other licenses, proceed with normal logic.
-
-    Uncertain licenses (warnings) include:
-    - LicenseRef-scancode-unknown-*
-    - LicenseRef-scancode-warranty-*
-    - LicenseRef-scancode-proprietary-* (when mixed with other uncertain licenses)
-    - Any other LicenseRef-scancode-* that's not in the known permissive list
+    Parse command-line arguments.
 
     Args:
-        issue (str): The license issue string.
+        argv: Argument list, excluding the program name (i.e. sys.argv[1:]).
 
     Returns:
-        bool: True if the issue is ONLY about uncertain licenses, False otherwise.
+        Parsed arguments with patch_file, repo_name, mode, and
+        proprietary_entities attributes.
+
+    Raises:
+        SystemExit: If mode is not one of "opensource"/"proprietary", or
+            required positional arguments are missing (argparse's own
+            fail-fast behavior).
     """
-    # Extract the license expression from the issue
-    if "Incompatible license added:" in issue:
-        license_expr = issue.split("Incompatible license added:")[1].strip()
-    elif "License deleted:" in issue and "and license added:" in issue:
-        # For license change issues, check the added license
-        license_expr = issue.split("and license added:")[1].strip()
-    else:
-        # For other issue types, check if it contains LicenseRef-scancode
-        return "LicenseRef-scancode-" in issue
-
-    # Parse the license expression to check if ALL licenses are unknown/uncertain
-    # Remove parentheses and split by AND/OR
-    licenses = []
-    for part in license_expr.replace("(", "").replace(")", "").split(" AND "):
-        for lic in part.split(" OR "):
-            lic = lic.strip()
-            if lic:
-                licenses.append(lic)
-
-    # Check if all licenses are unknown/uncertain
-    if not licenses:
-        return False
-
-    # SPECIAL CASE: If the ONLY license is exactly
-    # "LicenseRef-scancode-proprietary-license", block it
-    if len(licenses) == 1 and licenses[0] == "LicenseRef-scancode-proprietary-license":
-        return False
-
-    # A license is considered uncertain if:
-    # 1. It starts with LicenseRef-scancode- AND
-    # 2. It's not in the known permissive list (like LicenseRef-scancode-unicode)
-    def is_uncertain_license(lic: str) -> bool:
-        if not lic.startswith("LicenseRef-scancode-"):
-            return False
-        # Check if it's a known permissive LicenseRef
-        if lic in PERMISSIVE_LICENSES:
-            return False
-        return True
-
-    # If ALL licenses are uncertain, it's a warning
-    # If ANY license is a known incompatible license (like GPL), it's an error
-    all_uncertain = all(is_uncertain_license(lic) for lic in licenses)
-
-    return all_uncertain
+    parser = argparse.ArgumentParser(description="Copyright and license compliance checker.")
+    parser.add_argument("patch_file", help="Path to the patch file to check.")
+    parser.add_argument("repo_name", help="The name of the GitHub repository.")
+    parser.add_argument(
+        "--mode",
+        choices=("opensource", "proprietary"),
+        default="opensource",
+        help="Compliance mode (default: opensource).",
+    )
+    parser.add_argument(
+        "--proprietary-entities",
+        default="",
+        help=(
+            "Comma-separated copyright-holder strings, in addition to the "
+            "built-in defaults, treated as internal authorship in "
+            "proprietary mode."
+        ),
+    )
+    return parser.parse_args(argv)
 
 
-# TODO: exceeds team max-complexity=10, branch count, and local-variable count
-# (orchestrates license resolution, both checkers, and issue routing; revisit
-# extraction after proprietary mode lands and adds the mode-dispatch branches).
-def main() -> None:  # noqa: C901
-    # pylint: disable=too-many-branches,too-many-locals
+def resolve_internal_entities(proprietary_entities: str) -> list:
     """
-    The main function of the script.
-    """
-    # Clamp chatty logging from license_identifier
-    logging.basicConfig(level=logging.WARNING)
+    Resolve the internal-entity list from a comma-separated argument.
 
-    patch = Patch(sys.argv[1])
-    repo_name = sys.argv[2]
+    Args:
+        proprietary_entities: Comma-separated extra entity strings, or "".
+
+    Returns:
+        DEFAULT_INTERNAL_ENTITIES extended with any user-supplied entries.
+        Blank entries (from trailing commas or an empty string) are dropped.
+    """
+    extra = [entity.strip() for entity in proprietary_entities.split(",") if entity.strip()]
+    return DEFAULT_INTERNAL_ENTITIES + extra
+
+
+def resolve_allowed_licenses(mode: str, repo_name: str) -> tuple:
+    """
+    Resolve the repo's license and the allowed-license baseline for mode.
+
+    Args:
+        mode (str): "opensource" or "proprietary".
+        repo_name (str): The name of the repository.
+
+    Returns:
+        tuple: (repo_license, allowed_licenses). In proprietary mode,
+            repo_license is the literal string "proprietary" and
+            allowed_licenses is the canonical PERMISSIVE_LICENSES list --
+            proprietary repos are expected to have no LICENSE file, so
+            scanning for one would only produce misleading "Found license
+            file" / "Using default license" log noise, and permissiveness
+            in this mode is judged against the canonical list directly
+            (see LicenseChecker.run()).
+    """
+    if mode == "proprietary":
+        return "proprietary", PERMISSIVE_LICENSES
+
     repo_license = get_license(repo_name)
     if repo_license in PERMISSIVE_LICENSES:
-        allowed_licenses = PERMISSIVE_LICENSES
-    elif repo_license in COPYLEFT_LICENSES:
-        allowed_licenses = COPYLEFT_LICENSES
-    else:
-        # Handle complex license expressions (e.g., "GPL-2.0-only AND GPL-2.0-or-later")
-        # Parse the expression and include all component licenses
-        allowed_licenses = []
-        for part in repo_license.replace("(", "").replace(")", "").split(" AND "):
-            for lic in part.split(" OR "):
-                lic = lic.strip()
-                if lic:
-                    allowed_licenses.append(lic)
+        return repo_license, PERMISSIVE_LICENSES
+    if is_copyleft(repo_license):
+        return repo_license, COPYLEFT_LICENSES
 
-        # If no licenses were parsed, use the original license
-        if not allowed_licenses:
-            allowed_licenses = [repo_license]
+    # Handle complex license expressions (e.g., "GPL-2.0-only AND GPL-2.0-or-later")
+    allowed_licenses = split_license_components(repo_license)
+    # If no licenses were parsed, use the original license
+    return repo_license, allowed_licenses or [repo_license]
 
-    license_checker = LicenseChecker(patch, repo_name, allowed_licenses)
-    copyright_checker = CopyrightChecker(patch)
 
-    flagged_license_files = license_checker.run()
-    flagged_copyright_files = copyright_checker.run()
+def _route_issues(
+    flagged_license_files: dict, checker_warning_files: dict, flagged_copyright_files: dict
+) -> tuple:
+    """
+    Combine license/copyright checker output into the report's file->issues shape.
 
-    # Combine flagged files and their issues, separating errors from warnings
-    flagged_files = {}  # Blocking errors
-    warning_files = {}  # Non-blocking warnings
+    Args:
+        flagged_license_files (dict): path -> blocking license issues.
+        checker_warning_files (dict): path -> non-blocking license issues.
+        flagged_copyright_files (dict): path -> blocking copyright issues.
+
+    Returns:
+        tuple: (flagged_files, warning_files), each mapping
+            path -> {"license_issues": [...], "copyright_issues": [...]}.
+    """
+    flagged_files = {}
+    warning_files = {}
+
+    for file, issues in checker_warning_files.items():
+        warning_files[file] = {"license_issues": list(issues), "copyright_issues": []}
 
     for file, issues in flagged_license_files.items():
-        # Separate uncertain license issues (warnings) from real errors
-        error_issues = [issue for issue in issues if not is_uncertain_license_issue(issue)]
-        warning_issues = [issue for issue in issues if is_uncertain_license_issue(issue)]
-
-        if error_issues:
-            flagged_files[file] = {"license_issues": error_issues, "copyright_issues": []}
-        if warning_issues:
-            warning_files[file] = {"license_issues": warning_issues, "copyright_issues": []}
+        flagged_files[file] = {"license_issues": list(issues), "copyright_issues": []}
 
     for file, issues in flagged_copyright_files.items():
         if file in flagged_files:
             flagged_files[file]["copyright_issues"] = issues
         else:
             flagged_files[file] = {"license_issues": [], "copyright_issues": issues}
+
+    return flagged_files, warning_files
+
+
+def main() -> None:
+    """
+    The main function of the script.
+    """
+    # Clamp chatty logging from license_identifier
+    logging.basicConfig(level=logging.WARNING)
+
+    args = parse_args(sys.argv[1:])
+    patch = Patch(args.patch_file)
+    repo_name = args.repo_name
+    internal_entities = resolve_internal_entities(args.proprietary_entities)
+    repo_license, allowed_licenses = resolve_allowed_licenses(args.mode, repo_name)
+
+    license_checker = LicenseChecker(
+        patch, allowed_licenses, mode=args.mode, proprietary_entities=internal_entities
+    )
+    copyright_checker = CopyrightChecker(patch)
+
+    flagged_license_files, checker_warning_files = license_checker.run()
+    flagged_copyright_files = copyright_checker.run()
+    flagged_files, warning_files = _route_issues(
+        flagged_license_files, checker_warning_files, flagged_copyright_files
+    )
 
     beautify_output(flagged_files, warning_files, repo_license, LOG_PREFIX)
 

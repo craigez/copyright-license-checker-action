@@ -87,44 +87,6 @@ LcmZQzU|?Wm0Ac}f
 
 """
 
-# Files whose extensions are unconditionally skipped by the parser.
-EXCLUDED_EXTENSIONS = """diff --git a/README.md b/README.md
-index 1234567..89abcde 100644
---- a/README.md
-+++ b/README.md
-@@ -1 +1,2 @@
- # Title
-+Some new documentation line.
-diff --git a/recipe.bb b/recipe.bb
-index 1234567..89abcde 100644
---- a/recipe.bb
-+++ b/recipe.bb
-@@ -1 +1,2 @@
- SUMMARY = "thing"
-+LICENSE = "MIT"
-diff --git a/data.json b/data.json
-index 1234567..89abcde 100644
---- a/data.json
-+++ b/data.json
-@@ -1 +1,2 @@
- {}
-+{"a": 1}
-diff --git a/ci.yml b/ci.yml
-index 1234567..89abcde 100644
---- a/ci.yml
-+++ b/ci.yml
-@@ -1 +1,2 @@
- on: push
-+jobs: {}
-diff --git a/fix.patch b/fix.patch
-index 1234567..89abcde 100644
---- a/fix.patch
-+++ b/fix.patch
-@@ -1 +1,2 @@
- old
-+new
-"""
-
 # --- Regression-harness fixtures (see tests/test_regression_snapshot.py) ---
 # One file per patch so each maps to scancode detection keys "0_added.txt" /
 # "0_deleted.txt" -- the batch scanner indexes by position within the
@@ -174,4 +136,66 @@ index 0000000..1234567
 @@ -0,0 +1,2 @@
 +def new_feature():
 +    return None
+"""
+
+# A new source file carrying a Qualcomm copyright but no SPDX license --
+# the normal shape of an internal file in proprietary mode.
+NEW_FILE_WITH_INTERNAL_COPYRIGHT_NO_LICENSE = """diff --git a/src/new_module.c b/src/new_module.c
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/src/new_module.c
+@@ -0,0 +1,3 @@
++/*
++ * Copyright (c) 2024 Qualcomm Technologies, Inc. and/or its subsidiaries.
++ */
++int new_module(void) { return 0; }
+"""
+
+# A new source file with neither a license nor any copyright statement.
+NEW_FILE_NO_LICENSE_NO_COPYRIGHT = """diff --git a/src/new_module.c b/src/new_module.c
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/src/new_module.c
+@@ -0,0 +1,1 @@
++int new_module(void) { return 0; }
+"""
+
+# Files whose extensions are unconditionally skipped by the parser.
+EXCLUDED_EXTENSIONS = """diff --git a/README.md b/README.md
+index 1234567..89abcde 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1,2 @@
+ # Title
++Some new documentation line.
+diff --git a/recipe.bb b/recipe.bb
+index 1234567..89abcde 100644
+--- a/recipe.bb
++++ b/recipe.bb
+@@ -1 +1,2 @@
+ SUMMARY = "thing"
++LICENSE = "MIT"
+diff --git a/data.json b/data.json
+index 1234567..89abcde 100644
+--- a/data.json
++++ b/data.json
+@@ -1 +1,2 @@
+ {}
++{"a": 1}
+diff --git a/ci.yml b/ci.yml
+index 1234567..89abcde 100644
+--- a/ci.yml
++++ b/ci.yml
+@@ -1 +1,2 @@
+ on: push
++jobs: {}
+diff --git a/fix.patch b/fix.patch
+index 1234567..89abcde 100644
+--- a/fix.patch
++++ b/fix.patch
+@@ -1 +1,2 @@
+ old
++new
 """

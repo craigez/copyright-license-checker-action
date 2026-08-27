@@ -7,9 +7,7 @@ default) and the warning-vs-error classification of uncertain licenses.
 
 import contextlib
 import io
-import os
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch as mock_patch
@@ -17,21 +15,11 @@ from unittest.mock import MagicMock, patch as mock_patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import main  # noqa: E402  pylint: disable=wrong-import-position
+from tests.scancode_mock import TempCwdMixin  # noqa: E402  pylint: disable=wrong-import-position
 
 
-class LicenseFileTestCase(unittest.TestCase):
+class LicenseFileTestCase(TempCwdMixin, unittest.TestCase):
     """Base case that runs each test inside a scratch working directory."""
-
-    def setUp(self):
-        """Change into a temporary directory so LICENSE lookups are isolated."""
-        # pylint: disable=consider-using-with
-        # A `with` block can't span setUp/tearDown; addCleanup is the correct
-        # unittest idiom for scoping a TemporaryDirectory to the test lifetime.
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        original_cwd = os.getcwd()
-        os.chdir(self.tmp.name)
-        self.addCleanup(os.chdir, original_cwd)
 
 
 class TestDetectLicenseFromFile(LicenseFileTestCase):
@@ -118,85 +106,80 @@ class TestGetLicense(LicenseFileTestCase):
             self.assertTrue(detect.called)
 
 
-class TestIsUncertainLicenseIssue(unittest.TestCase):
-    """Classification of license issues as uncertain (warning) or real (error)."""
+class TestParseArgs(unittest.TestCase):
+    """parse_args resolves the CLI surface backing the action's inputs."""
 
-    def test_unknown_license_is_uncertain(self):
-        """A lone scancode 'unknown' reference is a warning."""
-        self.assertTrue(
-            main.is_uncertain_license_issue(
-                "Incompatible license added: LicenseRef-scancode-unknown-license-reference"
-            )
+    def test_positional_args_are_required(self):
+        """patch_file and repo_name are required positionals."""
+        args = main.parse_args(["pr.patch", "org/repo"])
+        self.assertEqual(args.patch_file, "pr.patch")
+        self.assertEqual(args.repo_name, "org/repo")
+
+    def test_mode_defaults_to_opensource(self):
+        """With no --mode flag, mode defaults to opensource."""
+        args = main.parse_args(["pr.patch", "org/repo"])
+        self.assertEqual(args.mode, "opensource")
+
+    def test_mode_accepts_proprietary(self):
+        """--mode proprietary is accepted."""
+        args = main.parse_args(["pr.patch", "org/repo", "--mode", "proprietary"])
+        self.assertEqual(args.mode, "proprietary")
+
+    def test_invalid_mode_exits(self):
+        """An unrecognized --mode value fails fast rather than being silently accepted."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                main.parse_args(["pr.patch", "org/repo", "--mode", "bogus"])
+
+    def test_proprietary_entities_defaults_to_empty_string(self):
+        """With no flag, proprietary_entities defaults to an empty string."""
+        args = main.parse_args(["pr.patch", "org/repo"])
+        self.assertEqual(args.proprietary_entities, "")
+
+    def test_proprietary_entities_is_captured(self):
+        """--proprietary-entities is captured verbatim for later parsing."""
+        args = main.parse_args(
+            ["pr.patch", "org/repo", "--proprietary-entities", "Acme Robotics,Other Co"]
         )
+        self.assertEqual(args.proprietary_entities, "Acme Robotics,Other Co")
 
-    def test_gpl_is_not_uncertain(self):
-        """A known copyleft license is an error, not a warning."""
-        self.assertFalse(
-            main.is_uncertain_license_issue("Incompatible license added: GPL-2.0-only")
-        )
+    def test_missing_positional_exits(self):
+        """Omitting a required positional fails fast."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                main.parse_args(["pr.patch"])
 
-    def test_mixed_unknown_and_gpl_is_not_uncertain(self):
-        """Any recognized incompatible license in the expression forces an error."""
-        issue = (
-            "Incompatible license added: GPL-2.0-only AND "
-            "LicenseRef-scancode-unknown-license-reference"
-        )
-        self.assertFalse(main.is_uncertain_license_issue(issue))
 
-    def test_all_uncertain_components_is_uncertain(self):
-        """An expression made only of uncertain references is a warning."""
-        issue = (
-            "Incompatible license added: LicenseRef-scancode-unknown-license-reference AND "
-            "LicenseRef-scancode-warranty-disclaimer"
-        )
-        self.assertTrue(main.is_uncertain_license_issue(issue))
+class TestResolveInternalEntities(unittest.TestCase):
+    """resolve_internal_entities builds the entity list passed to LicenseChecker."""
 
-    def test_solitary_proprietary_license_is_not_uncertain(self):
+    def test_empty_string_returns_only_defaults(self):
+        """An empty proprietary_entities value returns just the built-in defaults."""
+        self.assertEqual(main.resolve_internal_entities(""), main.DEFAULT_INTERNAL_ENTITIES)
+
+    def test_extra_entities_are_appended(self):
         """
-        A lone proprietary-license detection is a blocking error today. Proprietary
-        mode will make this mode-aware; this test pins the current behavior.
+        User-supplied entities are appended after the defaults. Entity names
+        must not contain commas, since that is the field separator.
         """
-        self.assertFalse(
-            main.is_uncertain_license_issue(
-                "Incompatible license added: LicenseRef-scancode-proprietary-license"
-            )
-        )
+        result = main.resolve_internal_entities("Acme Robotics,Other Co")
+        self.assertEqual(result, main.DEFAULT_INTERNAL_ENTITIES + ["Acme Robotics", "Other Co"])
 
-    def test_proprietary_mixed_with_unknown_is_uncertain(self):
-        """Mixed with other uncertain references, proprietary becomes a warning."""
-        issue = (
-            "Incompatible license added: LicenseRef-scancode-proprietary-license AND "
-            "LicenseRef-scancode-unknown-license-reference"
-        )
-        self.assertTrue(main.is_uncertain_license_issue(issue))
+    def test_whitespace_around_entries_is_stripped(self):
+        """Surrounding whitespace on each comma-separated entry is stripped."""
+        result = main.resolve_internal_entities("  Acme Robotics , Other Co  ")
+        self.assertEqual(result, main.DEFAULT_INTERNAL_ENTITIES + ["Acme Robotics", "Other Co"])
 
-    def test_license_change_issue_examines_added_license(self):
-        """For a change issue, only the added license decides the outcome."""
-        self.assertTrue(
-            main.is_uncertain_license_issue(
-                "License deleted: MIT and license added: LicenseRef-scancode-unknown"
-            )
-        )
-        self.assertFalse(
-            main.is_uncertain_license_issue("License deleted: MIT and license added: GPL-2.0-only")
-        )
+    def test_blank_entries_are_dropped(self):
+        """A trailing comma or blank entry does not produce an empty string entity."""
+        result = main.resolve_internal_entities("Acme Robotics,,")
+        self.assertEqual(result, main.DEFAULT_INTERNAL_ENTITIES + ["Acme Robotics"])
 
-    def test_permissive_licenseref_is_not_uncertain(self):
-        """A LicenseRef that appears in the permissive list is not uncertain."""
-        self.assertFalse(
-            main.is_uncertain_license_issue(
-                "Incompatible license added: LicenseRef-scancode-unicode"
-            )
-        )
-
-    def test_other_issue_types_match_on_substring(self):
-        """Issues that are neither add nor change fall back to a substring check."""
-        self.assertTrue(
-            main.is_uncertain_license_issue("License deleted: LicenseRef-scancode-unknown")
-        )
-        self.assertFalse(
-            main.is_uncertain_license_issue("No license added for source file: src/foo.c")
-        )
+    def test_does_not_mutate_the_default_list(self):
+        """The returned list is a new object; DEFAULT_INTERNAL_ENTITIES is untouched."""
+        original = list(main.DEFAULT_INTERNAL_ENTITIES)
+        main.resolve_internal_entities("Acme Robotics")
+        self.assertEqual(main.DEFAULT_INTERNAL_ENTITIES, original)
 
 
 class TestBeautifyOutput(unittest.TestCase):
@@ -278,21 +261,30 @@ class TestMainEntryPoint(LicenseFileTestCase):
     list, run both checkers and route issues into blocking vs. warning buckets.
     """
 
-    def run_main(self, argv: list, license_issues: dict, copyright_issues: dict):
+    def run_main(
+        self,
+        argv: list,
+        license_issues: dict,
+        copyright_issues: dict,
+        license_warning_issues: dict = None,
+    ):
         """
         Run main() with both checkers stubbed out.
 
         Args:
             argv: Replacement sys.argv.
-            license_issues: Return value for LicenseChecker.run().
+            license_issues: Blocking half of LicenseChecker.run()'s return tuple.
             copyright_issues: Return value for CopyrightChecker.run().
+            license_warning_issues: Warning half of LicenseChecker.run()'s
+                return tuple; defaults to empty (opensource mode never
+                populates it directly today).
 
         Returns:
             Tuple of (captured stdout, exit code).
         """
         buffer = io.StringIO()
         license_checker = MagicMock()
-        license_checker.run.return_value = license_issues
+        license_checker.run.return_value = (license_issues, license_warning_issues or {})
         copyright_checker = MagicMock()
         copyright_checker.run.return_value = copyright_issues
 
@@ -321,8 +313,13 @@ class TestMainEntryPoint(LicenseFileTestCase):
         )
         self.assertEqual(code, 1)
 
-    def test_uncertain_license_issue_is_a_warning(self):
-        """An uncertain license issue is routed to warnings and exits 0."""
+    def test_checker_flagged_issue_is_never_reclassified_by_main(self):
+        """
+        main() no longer re-parses issue text to decide severity -- whatever
+        LicenseChecker.run() puts in its blocking half stays blocking, even
+        when the message contains "LicenseRef-scancode-" (the substring the
+        old catch-all matched on, causing BUG-1).
+        """
         output, code = self.run_main(
             ["main.py", "pr.patch", "org/repo"],
             {
@@ -332,8 +329,39 @@ class TestMainEntryPoint(LicenseFileTestCase):
             },
             {},
         )
+        self.assertEqual(code, 1)
+        self.assertIn("B L O C K I N G", output)
+
+    def test_checker_supplied_warning_is_rendered(self):
+        """
+        A warning returned directly in LicenseChecker.run()'s warning half
+        (as proprietary mode produces) is rendered without blocking the build.
+        """
+        output, code = self.run_main(
+            ["main.py", "pr.patch", "org/repo"],
+            {},
+            {},
+            license_warning_issues={"src/a.c": ["Permissive open-source license added: MIT"]},
+        )
         self.assertEqual(code, 0)
         self.assertIn("W A R N I N G S", output)
+        self.assertIn("Permissive open-source license added: MIT", output)
+
+    def test_checker_warning_and_blocking_issue_coexist_on_same_file(self):
+        """
+        A file with both a checker-supplied warning and a checker-supplied
+        blocking issue is rendered in both sections rather than one clobbering
+        the other -- flagged_files and warning_files are independent dicts.
+        """
+        output, code = self.run_main(
+            ["main.py", "pr.patch", "org/repo"],
+            {"src/a.c": ["Incompatible license added: GPL-2.0-only"]},
+            {},
+            license_warning_issues={"src/a.c": ["Permissive open-source license added: MIT"]},
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("Permissive open-source license added: MIT", output)
+        self.assertIn("Incompatible license added: GPL-2.0-only", output)
 
     def test_copyright_issue_blocks(self):
         """A copyright deletion is always a blocking issue."""
@@ -387,13 +415,13 @@ class TestMainEntryPoint(LicenseFileTestCase):
             mock_patch("main.CopyrightChecker") as copyright_cls,
             mock_patch("main.LicenseChecker") as license_cls,
         ):
-            license_cls.return_value.run.return_value = {}
+            license_cls.return_value.run.return_value = ({}, {})
             copyright_cls.return_value.run.return_value = {}
             with mock_patch.object(sys, "argv", ["main.py", "pr.patch", "org/repo"]):
                 with contextlib.redirect_stdout(io.StringIO()):
                     with self.assertRaises(SystemExit):
                         main.main()
-            self.assertEqual(license_cls.call_args[0][2], main.PERMISSIVE_LICENSES)
+            self.assertEqual(license_cls.call_args[0][1], main.PERMISSIVE_LICENSES)
 
     def test_copyleft_repo_gets_copyleft_allowed_list(self):
         """A copyleft repo license selects the copyleft allowed list."""
@@ -403,13 +431,13 @@ class TestMainEntryPoint(LicenseFileTestCase):
             mock_patch("main.CopyrightChecker") as copyright_cls,
             mock_patch("main.LicenseChecker") as license_cls,
         ):
-            license_cls.return_value.run.return_value = {}
+            license_cls.return_value.run.return_value = ({}, {})
             copyright_cls.return_value.run.return_value = {}
             with mock_patch.object(sys, "argv", ["main.py", "pr.patch", "org/repo"]):
                 with contextlib.redirect_stdout(io.StringIO()):
                     with self.assertRaises(SystemExit):
                         main.main()
-            self.assertEqual(license_cls.call_args[0][2], main.COPYLEFT_LICENSES)
+            self.assertEqual(license_cls.call_args[0][1], main.COPYLEFT_LICENSES)
 
     def test_compound_expression_is_parsed_into_components(self):
         """An unrecognized compound expression is split into its components."""
@@ -419,13 +447,85 @@ class TestMainEntryPoint(LicenseFileTestCase):
             mock_patch("main.CopyrightChecker") as copyright_cls,
             mock_patch("main.LicenseChecker") as license_cls,
         ):
-            license_cls.return_value.run.return_value = {}
+            license_cls.return_value.run.return_value = ({}, {})
             copyright_cls.return_value.run.return_value = {}
             with mock_patch.object(sys, "argv", ["main.py", "pr.patch", "org/repo"]):
                 with contextlib.redirect_stdout(io.StringIO()):
                     with self.assertRaises(SystemExit):
                         main.main()
-            self.assertEqual(license_cls.call_args[0][2], ["GPL-2.0-only", "MIT"])
+            self.assertEqual(license_cls.call_args[0][1], ["GPL-2.0-only", "MIT"])
+
+    def test_proprietary_mode_skips_get_license(self):
+        """
+        Proprietary repos are expected to have no LICENSE file; get_license()'s
+        scan (and its misleading "Found license file" / "Using default
+        license" logging) must not run in this mode.
+        """
+        with (
+            mock_patch("main.get_license") as get_license_mock,
+            mock_patch("main.Patch"),
+            mock_patch("main.CopyrightChecker") as copyright_cls,
+            mock_patch("main.LicenseChecker") as license_cls,
+        ):
+            license_cls.return_value.run.return_value = ({}, {})
+            copyright_cls.return_value.run.return_value = {}
+            with mock_patch.object(
+                sys, "argv", ["main.py", "pr.patch", "org/repo", "--mode", "proprietary"]
+            ):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        main.main()
+            get_license_mock.assert_not_called()
+
+    def test_proprietary_mode_passes_canonical_permissive_list(self):
+        """
+        Proprietary mode passes the canonical PERMISSIVE_LICENSES to
+        LicenseChecker, not a repo-derived list (Finding 1).
+        """
+        with (
+            mock_patch("main.get_license"),
+            mock_patch("main.Patch"),
+            mock_patch("main.CopyrightChecker") as copyright_cls,
+            mock_patch("main.LicenseChecker") as license_cls,
+        ):
+            license_cls.return_value.run.return_value = ({}, {})
+            copyright_cls.return_value.run.return_value = {}
+            with mock_patch.object(
+                sys, "argv", ["main.py", "pr.patch", "org/repo", "--mode", "proprietary"]
+            ):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        main.main()
+            self.assertEqual(license_cls.call_args[0][1], main.PERMISSIVE_LICENSES)
+            self.assertEqual(license_cls.call_args.kwargs["mode"], "proprietary")
+
+    def test_proprietary_entities_are_resolved_and_passed_through(self):
+        """A --proprietary-entities value is resolved and passed to LicenseChecker."""
+        with (
+            mock_patch("main.get_license"),
+            mock_patch("main.Patch"),
+            mock_patch("main.CopyrightChecker") as copyright_cls,
+            mock_patch("main.LicenseChecker") as license_cls,
+        ):
+            license_cls.return_value.run.return_value = ({}, {})
+            copyright_cls.return_value.run.return_value = {}
+            argv = [
+                "main.py",
+                "pr.patch",
+                "org/repo",
+                "--mode",
+                "proprietary",
+                "--proprietary-entities",
+                "Acme Robotics",
+            ]
+            with mock_patch.object(sys, "argv", argv):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        main.main()
+            self.assertEqual(
+                license_cls.call_args.kwargs["proprietary_entities"],
+                main.DEFAULT_INTERNAL_ENTITIES + ["Acme Robotics"],
+            )
 
 
 class TestLicenseListsAreDisjoint(unittest.TestCase):

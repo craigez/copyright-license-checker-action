@@ -30,9 +30,19 @@ confidence=
 # too-few-public-methods: several classes here (Patch, IgnoreConfig) are
 #   deliberately single-purpose data holders; forcing a second method would be
 #   busywork, not better design.
-# duplicate-code: the flagged spans are a short scancode subprocess invocation
-#   and a test fixture dict builder — extracting a shared helper for either
-#   would add indirection without reducing real duplication risk.
+# duplicate-code: cannot be scoped with an inline `# pylint: disable=` comment
+#   in this pylint version (verified -- R0801 is a whole-run similarity
+#   checker, not a per-node one). Two spans are accepted as genuine but not
+#   worth abstracting:
+#     - main.py's detect_license_from_file() / scanner/license_scancode.py's
+#       detect_licenses_batch(): the scancode subprocess.run() invocation.
+#     - tests/test_copyright_checker.py's make_change() /
+#       tests/test_license_scancode.py's make_change(): a small fixture dict
+#       literal, one test-only helper apiece.
+#   Other duplication pylint has flagged here (the scancode-mock JSON builder
+#   and the tempdir/chdir test setUp) was extracted into
+#   tests/scancode_mock.py rather than accepted -- re-run without this
+#   disable and check tests/scancode_mock.py's callers if a new span appears.
 disable=missing-docstring,invalid-name,too-few-public-methods,duplicate-code,fixme
 
 [REPORTS]

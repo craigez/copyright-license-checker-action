@@ -6,6 +6,67 @@ import re
 
 from scanner.patch import Patch
 
+# Copyright-bearing added/deleted lines, shared by detect_copyright_changes and
+# has_internal_copyright so both extract lines the same way.
+_ADDED_COPYRIGHT_PATTERN = r"^\+.*Copyright.*"
+_DELETED_COPYRIGHT_PATTERN = r"^-.*Copyright.*"
+
+# Default copyright-holder substrings recognized as internal (proprietary
+# mode). Both the short and long Qualcomm forms are listed even though the
+# short form already substring-matches the long one, so that removing or
+# narrowing the short entry later doesn't silently drop long-form coverage.
+#
+# This list is entirely independent of _check_allowed_transitions below: that
+# method's QUIC -> QTI exception matches one specific, longer statement pair
+# and must stay byte-identical. If the two ever shared a list, this shorter
+# "Qualcomm Technologies, Inc." entry would start excusing copyright deletions
+# that exception currently blocks -- in both opensource and proprietary modes.
+DEFAULT_INTERNAL_ENTITIES = [
+    "Qualcomm Technologies, Inc.",
+    "Qualcomm Technologies, Inc. and/or its subsidiaries",
+]
+
+
+def has_internal_copyright(content: str, entities: list[str] | None = None) -> bool:
+    """
+    Check whether content contains a copyright line naming an internal entity.
+
+    Independent of _check_allowed_transitions and its QUIC -> QTI exception --
+    this is a plain substring match against a configured entity list, not a
+    from/to transition check.
+
+    Args:
+        content: Diff content for a single file change.
+        entities: Copyright-holder substrings to match; defaults to
+            DEFAULT_INTERNAL_ENTITIES.
+
+    Returns:
+        True if any Copyright-bearing line (added or deleted) contains one of
+        the entity strings.
+    """
+    if not isinstance(content, str):
+        return False
+    if entities is None:
+        entities = DEFAULT_INTERNAL_ENTITIES
+
+    copyright_lines = re.findall(_ADDED_COPYRIGHT_PATTERN, content, re.MULTILINE) + re.findall(
+        _DELETED_COPYRIGHT_PATTERN, content, re.MULTILINE
+    )
+    return any(entity in line for line in copyright_lines for entity in entities)
+
+
+def normalize_string(s: str) -> str:
+    """
+    Normalize a string by removing non-alphabetic characters.
+
+    Args:
+        s (str): The string to normalize.
+
+    Returns:
+        str: The normalized string.
+    """
+    return "".join(filter(str.isalpha, s))
+
 
 class CopyrightChecker:
     """
@@ -20,18 +81,6 @@ class CopyrightChecker:
             patch (Patch): The patch file to check.
         """
         self.patch = patch
-
-    def normalize_string(self, s: str) -> str:
-        """
-        Normalize a string by removing non-alphabetic characters.
-
-        Args:
-            s (str): The string to normalize.
-
-        Returns:
-            str: The normalized string.
-        """
-        return "".join(filter(str.isalpha, s))
 
     def _check_allowed_transitions(
         self, deleted_copyrights_set: dict, added_copyrights: list
@@ -77,12 +126,12 @@ class CopyrightChecker:
             return [], []
 
         added_copyrights = [
-            (line[1:], self.normalize_string(line[1:]))
-            for line in re.findall(r"^\+.*Copyright.*", content, re.MULTILINE)
+            (line[1:], normalize_string(line[1:]))
+            for line in re.findall(_ADDED_COPYRIGHT_PATTERN, content, re.MULTILINE)
         ]
         deleted_copyrights = [
-            (line[1:], self.normalize_string(line[1:]))
-            for line in re.findall(r"^-.*Copyright.*", content, re.MULTILINE)
+            (line[1:], normalize_string(line[1:]))
+            for line in re.findall(_DELETED_COPYRIGHT_PATTERN, content, re.MULTILINE)
         ]
         return added_copyrights, deleted_copyrights
 
