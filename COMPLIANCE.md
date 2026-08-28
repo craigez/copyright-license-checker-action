@@ -6,11 +6,15 @@ This GitHub Action enforces copyright and license compliance for code changes in
 
 **Action Repository**: https://github.com/qualcomm/copyright-license-checker-action
 
+> **Two modes.** This document describes `mode: opensource` (the default) unless a section says otherwise. If you are checking an internally-developed proprietary codebase, set `mode: proprietary` and read [Proprietary Mode](#proprietary-mode) alongside this — most rules are identical, but a few differ.
+
 ## Build Blocking Scenarios
 
 The following scenarios will **BLOCK** your build and require remediation before the PR can be merged:
 
 ### 1. Incompatible License Added
+
+> **Mode-dependent:** in `mode: proprietary`, adding a *permissive* open-source license is a warning rather than a block — see [Proprietary Mode](#proprietary-mode). Copyleft/AGPL/other restrictive licenses are unaffected and still block in both modes.
 
 **What triggers this:**
 - Adding code with a license that is not in the repository's allowed license list
@@ -61,6 +65,8 @@ The following scenarios will **BLOCK** your build and require remediation before
 
 ### 3. License Change (Modification)
 
+> **Mode-dependent:** in `mode: proprietary`, removing a proprietary rights statement is always a blocking error regardless of what replaces it, with a distinct message — see [Proprietary Mode](#proprietary-mode).
+
 **What triggers this:**
 - Changing the license of existing code from one license to another
 - Replacing license headers with different licenses
@@ -85,6 +91,8 @@ The following scenarios will **BLOCK** your build and require remediation before
 ---
 
 ### 4. Missing License on New Source Files
+
+> **Mode-dependent:** in `mode: proprietary`, a file carrying a recognized internal copyright is exempt from this rule, and the message differs when it isn't — see [Proprietary Mode](#proprietary-mode).
 
 **What triggers this:**
 - Adding new source code files without license headers
@@ -204,6 +212,8 @@ These cases require human review but shouldn't automatically block development, 
 
 ### Special Case: Sole Proprietary License
 
+> **Mode-dependent:** this section describes `mode: opensource` (the default). In `mode: proprietary` a sole proprietary detection is *expected* and raises no issue at all, unless the same change deletes a license of its own — see [Proprietary Mode](#proprietary-mode).
+
 **What triggers this:**
 - A file contains ONLY `LicenseRef-scancode-proprietary-license` with no other licenses
 
@@ -227,6 +237,102 @@ When scancode identifies a file as having ONLY a proprietary license (not mixed 
 **Note:** If `LicenseRef-scancode-proprietary-license` appears mixed with other uncertain licenses (e.g., `LicenseRef-scancode-unknown-*`), it's treated as a warning for manual review, as this may indicate scancode detection ambiguity rather than actual proprietary code.
 
 **Compliance Impact:** HIGH - Proprietary code in open-source repositories creates licensing conflicts
+
+---
+
+## Proprietary Mode
+
+By default this action assumes it is checking an **open-source** repository. Set `mode: proprietary` to check an internally-developed proprietary codebase instead, where Qualcomm-authored files carry a proprietary rights statement rather than an OSS license.
+
+```yaml
+- name: Run copyright/license detector
+  uses: qualcomm/copyright-license-checker-action@main
+  with:
+    patch_file: pr.patch
+    repo_name: ${{ github.repository }}
+    mode: proprietary
+```
+
+### Inputs
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `mode` | `opensource` | `opensource` or `proprietary`. Any other value fails immediately. |
+| `proprietary_entities` | *(empty)* | Comma-separated extra copyright-holder strings treated as internal authorship, **in addition to** the built-in defaults. Entity names cannot contain commas, since a comma is the field separator. |
+
+The built-in internal entities are `Qualcomm Technologies, Inc.` and `Qualcomm Technologies, Inc. and/or its subsidiaries`.
+
+### Proprietary repositories have no LICENSE file
+
+This is expected and correct — a proprietary repository is not distributed under an open-source license. In `proprietary` mode the action does **not** scan for a `LICENSE`/`COPYING` file at all, and license compatibility is judged against the built-in permissive-license list directly.
+
+### What changes in proprietary mode
+
+Everything not listed here behaves exactly as documented above. In particular, **copyleft licenses, license deletions, license modifications, and copyright deletions are all still blocking errors** — proprietary mode does not relax legal or compliance risk, only the open-source-versus-proprietary judgment calls.
+
+#### 1. Removing a proprietary rights statement — BLOCKING
+
+Deleting a proprietary marking is a blocking error regardless of what replaces it. Replacing a proprietary header with a permissive open-source license is still a removal of the marking, and blocks.
+
+```
+🚨 BLOCKING ERROR:
+📄 File: src/internal_module.c
+🚨 License issues detected:
+  - Proprietary license statement removed: LicenseRef-scancode-proprietary-license -- removing a proprietary rights statement requires review; restore it, or route the change to the scan team/legal if the file's status has genuinely changed.
+```
+
+**How to fix:** restore the statement. If the file's licensing status has genuinely changed, route the change to the scan team/legal rather than making the change unilaterally.
+
+This is detected per-component, so removing the marker from a compound expression such as `LicenseRef-scancode-proprietary-license AND GPL-2.0-only` also blocks. A marking present unchanged on both sides of the diff (for example a reformatted header) is not a removal.
+
+#### 2. Adding permissive open-source code — WARNING
+
+Vendoring permissive OSS (MIT, BSD, Apache-2.0, …) into a proprietary repository is allowed, but warns so a human reviews it and records the attribution.
+
+```
+⚠️ WARNINGS (Non-blocking):
+📄 File: src/vendor/third_party.c
+⚠️ License warnings:
+  - Permissive open-source license added: MIT -- review that this third-party code is approved for inclusion, and update the repo's NOTICE file with the required attribution.
+```
+
+**What to do:**
+- Confirm the third-party code is approved for inclusion
+- **Update the repository's `NOTICE` file** with the required attribution
+
+This applies whether the file was previously unmarked or keeps its proprietary marking (for example a file detected as `MIT AND LicenseRef-scancode-proprietary-license`). It does not fire for a license that is unchanged across the diff. Copyleft additions are unaffected and still block, even alongside a retained proprietary marking.
+
+#### 3. Sole proprietary license detection — NO ISSUE
+
+A file detected as only `LicenseRef-scancode-proprietary-license` is the normal case for an internal Qualcomm header and raises no issue. (In `opensource` mode this blocks — see the section above.)
+
+This covers adding an internal header, and reformatting one that is already there. It does **not** extend to a change that gives up a license of its own: deleting a real license and marking the file proprietary in its place is a relicensing of third-party code, and still blocks as a license change (scenario 3 above).
+
+```
+🚨 BLOCKING ERROR:
+📄 File: src/core.cpp
+🚨 License issues detected:
+  - License deleted: MIT and license added: LicenseRef-scancode-proprietary-license -- a permissive license's attribution terms are not extinguished by marking the file proprietary; restore the deleted license, or route the change to the scan team/legal if the file's licensing has genuinely changed.
+```
+
+**How to fix:**
+- Restore the original license header — a permissive license's attribution terms survive vendoring into a proprietary repository
+- If the file is genuinely Qualcomm-authored and the OSS header was there in error, route the change to the scan team/legal rather than removing the header yourself
+
+#### 4. New source file with no license — BLOCKING, with different guidance
+
+A new source file with no detected license is **not** blocked if it carries a copyright naming one of the recognized internal entities; that is the ordinary case for internal code. If it has neither a license nor a recognized internal copyright, it still blocks:
+
+```
+🚨 BLOCKING ERROR:
+📄 File: src/new_module.c
+🚨 License issues detected:
+  - No license or internal copyright found for source file: src/new_module.c -- if this is third-party code, do NOT add a Qualcomm copyright; route it to the scan team/legal for review. If this is Qualcomm-authored code, add the appropriate copyright marking.
+```
+
+**How to fix — the two possibilities are different:**
+- **Third-party code**: do **not** add a Qualcomm copyright to it. Route it to the scan team/legal for review.
+- **Qualcomm-authored code**: add the appropriate copyright marking.
 
 ---
 
