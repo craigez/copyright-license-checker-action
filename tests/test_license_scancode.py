@@ -6,10 +6,15 @@ subprocess.run and the JSON file it writes. That keeps the suite fast and avoids
 depending on the multi-hundred-megabyte scancode-toolkit package.
 """
 
+import json
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock
+from unittest.mock import patch as mock_patch
 
+from scanner.copyright_checker import DEFAULT_INTERNAL_ENTITIES
 from scanner.license_scancode import LicenseChecker
+from scanner.licenses import PROPRIETARY_LICENSE
 from tests.scancode_mock import scancode_mock_patcher
 
 PERMISSIVE = [
@@ -85,7 +90,7 @@ class TestIsSourceFile(unittest.TestCase):
 
     def setUp(self):
         """Create a checker with an empty patch."""
-        self.checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
+        self.checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
 
     def test_known_source_extensions(self):
         """Recognized code extensions are source files."""
@@ -113,13 +118,40 @@ class TestIsSourceFile(unittest.TestCase):
             self.assertFalse(self.checker.is_source_file(name), name)
 
 
+class TestLicenseCheckerModePlumbing(unittest.TestCase):
+    """
+    Constructor defaults for mode/proprietary_entities.
+    """
+
+    def test_mode_defaults_to_opensource(self):
+        """With no mode argument, the checker defaults to opensource."""
+        checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
+        self.assertEqual(checker.mode, "opensource")
+
+    def test_proprietary_entities_defaults_to_module_default(self):
+        """With no proprietary_entities argument, the module default is used."""
+        checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
+        self.assertEqual(checker.proprietary_entities, DEFAULT_INTERNAL_ENTITIES)
+
+    def test_mode_and_entities_are_stored_when_provided(self):
+        """Explicit mode/proprietary_entities arguments are stored as given."""
+        checker = LicenseChecker(
+            make_patch_obj([]),
+            PERMISSIVE,
+            mode="proprietary",
+            proprietary_entities=["Acme Robotics"],
+        )
+        self.assertEqual(checker.mode, "proprietary")
+        self.assertEqual(checker.proprietary_entities, ["Acme Robotics"])
+
+
 class TestDetectLicensesBatch(ScancodeMockMixin, unittest.TestCase):
     """Batch scanning splits added and deleted lines into separate scans."""
 
     def test_added_and_deleted_are_scanned_separately(self):
         """Added and deleted line groups get independent results."""
         self.install_scancode_mock({"0_added.txt": "MIT", "0_deleted.txt": "BSD-3-Clause"})
-        checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
+        checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
         results = checker.detect_licenses_batch(
             [make_change("+MIT license text\n-BSD license text\n")]
         )
@@ -129,15 +161,39 @@ class TestDetectLicensesBatch(ScancodeMockMixin, unittest.TestCase):
     def test_empty_content_is_skipped(self):
         """A change with no content produces no scan results."""
         self.install_scancode_mock({})
-        checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
+        checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
         self.assertEqual(checker.detect_licenses_batch([make_change(None)]), {})
 
     def test_no_detection_omits_entry(self):
         """A scanned file with no license detections yields a falsy result."""
         self.install_scancode_mock({"0_added.txt": None})
-        checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
+        checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
         results = checker.detect_licenses_batch([make_change("+just some code\n")])
         self.assertFalse(results.get((0, "added")))
+
+    def test_multiple_changes_share_a_single_subprocess_call(self):
+        """
+        All changes are batched into one scancode invocation, not one
+        subprocess.run per change.
+        """
+
+        def fake_run(cmd, **_kwargs):
+            output_file = cmd[cmd.index("--json-pp") + 1]
+            Path(output_file).write_text(json.dumps({"files": []}), encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
+        with mock_patch(
+            "scanner.license_scancode.subprocess.run", side_effect=fake_run
+        ) as run_mock:
+            checker.detect_licenses_batch(
+                [
+                    make_change("+MIT text\n"),
+                    make_change("+Apache text\n"),
+                    make_change("-BSD text\n"),
+                ]
+            )
+        self.assertEqual(run_mock.call_count, 1)
 
 
 class TestRunLicenseRules(ScancodeMockMixin, unittest.TestCase):
@@ -153,11 +209,12 @@ class TestRunLicenseRules(ScancodeMockMixin, unittest.TestCase):
             allowed: Allowed license list; defaults to the permissive set.
 
         Returns:
-            The flagged-files dictionary.
+            The blocking-files dictionary.
         """
         self.install_scancode_mock(detections)
-        checker = LicenseChecker(make_patch_obj(changes), "org/repo", allowed or PERMISSIVE)
-        return checker.run()
+        checker = LicenseChecker(make_patch_obj(changes), allowed or PERMISSIVE)
+        flagged, _warnings = checker.run()
+        return flagged
 
     def test_incompatible_license_added_is_flagged(self):
         """Adding a copyleft license to a permissive repo is flagged."""
@@ -215,15 +272,17 @@ class TestRunLicenseRules(ScancodeMockMixin, unittest.TestCase):
 
     def test_no_source_files_returns_empty(self):
         """With no source changes, run() short-circuits."""
-        checker = LicenseChecker(make_patch_obj([]), "org/repo", PERMISSIVE)
-        self.assertEqual(checker.run(), {})
+        checker = LicenseChecker(make_patch_obj([]), PERMISSIVE)
+        self.assertEqual(checker.run(), ({}, {}))
 
 
 class TestRunChangeTypeCoverageGaps(ScancodeMockMixin, unittest.TestCase):
     """
-    Documents pre-existing gaps: license rules apply only to MODIFIED and ADDED
-    changes. DELETED and RENAMED changes are never license-checked. These assert
-    current behavior, not desired behavior.
+    License rules apply only to MODIFIED and ADDED changes. DELETED is a
+    deliberate exemption (see COMPLIANCE.md's Known Limitations): a deleted
+    file's license no longer applies to anything. RENAMED is a known,
+    not-yet-fixed gap: a rename that also modifies content should be checked
+    like a MODIFIED change but is not.
     """
 
     def test_deleted_change_type_is_not_license_checked(self):
@@ -231,20 +290,18 @@ class TestRunChangeTypeCoverageGaps(ScancodeMockMixin, unittest.TestCase):
         self.install_scancode_mock({"0_deleted.txt": "MIT"})
         checker = LicenseChecker(
             make_patch_obj([make_change("-MIT text\n", change_type="DELETED")]),
-            "org/repo",
             PERMISSIVE,
         )
-        self.assertEqual(checker.run(), {})
+        self.assertEqual(checker.run(), ({}, {}))
 
     def test_renamed_change_type_is_not_license_checked(self):
         """RENAMED changes are not license-checked."""
         self.install_scancode_mock({"0_deleted.txt": "MIT"})
         checker = LicenseChecker(
             make_patch_obj([make_change("-MIT text\n", change_type="RENAMED")]),
-            "org/repo",
             PERMISSIVE,
         )
-        self.assertEqual(checker.run(), {})
+        self.assertEqual(checker.run(), ({}, {}))
 
 
 class TestLicenseComparisonFix(ScancodeMockMixin, unittest.TestCase):
@@ -261,11 +318,191 @@ class TestLicenseComparisonFix(ScancodeMockMixin, unittest.TestCase):
         self.install_scancode_mock({"0_added.txt": "TIM", "0_deleted.txt": "MIT"})
         checker = LicenseChecker(
             make_patch_obj([make_change("+TIM text\n-MIT text\n")]),
-            "org/repo",
             PERMISSIVE,
         )
-        flagged = checker.run()
+        flagged, _warnings = checker.run()
         self.assertIn("License deleted: MIT and license added: TIM", flagged["src/foo.c"][0])
+
+
+class TestRunSeverityRouting(ScancodeMockMixin, unittest.TestCase):
+    """LicenseChecker assigns warning versus blocking severity."""
+
+    def run_checker(self, changes: list, detections: dict) -> tuple:
+        """Install the ScanCode mock and return the checker result buckets."""
+        self.install_scancode_mock(detections)
+        return LicenseChecker(make_patch_obj(changes), PERMISSIVE).run()
+
+    def test_unknown_addition_is_a_warning(self):
+        """An unrecognized ScanCode reference does not block the action."""
+        flagged, warnings = self.run_checker(
+            [make_change("+unknown license\n")],
+            {"0_added.txt": "LicenseRef-scancode-unknown-license-reference"},
+        )
+        self.assertEqual(flagged, {})
+        self.assertIn("Incompatible license added", warnings["src/foo.c"][0])
+
+    def test_mixed_gpl_and_unknown_addition_is_blocking(self):
+        """A known incompatible component keeps a mixed expression blocking."""
+        flagged, warnings = self.run_checker(
+            [make_change("+license\n")],
+            {"0_added.txt": "GPL-2.0-only AND LicenseRef-scancode-unknown-license-reference"},
+        )
+        self.assertIn("src/foo.c", flagged)
+        self.assertEqual(warnings, {})
+
+    def test_solitary_proprietary_marker_is_blocking(self):
+        """The existing proprietary marker remains a blocking issue."""
+        flagged, warnings = self.run_checker(
+            [make_change("+license\n")],
+            {"0_added.txt": "LicenseRef-scancode-proprietary-license"},
+        )
+        self.assertIn("src/foo.c", flagged)
+        self.assertEqual(warnings, {})
+
+    def test_unknown_deletion_is_a_warning(self):
+        """Deletion-only ScanCode references preserve the legacy warning behavior."""
+        flagged, warnings = self.run_checker(
+            [make_change("-unknown license\n")],
+            {"0_deleted.txt": "LicenseRef-scancode-unknown-license-reference"},
+        )
+        self.assertEqual(flagged, {})
+        self.assertIn("License deleted", warnings["src/foo.c"][0])
+
+
+class TestRunProprietaryMode(ScancodeMockMixin, unittest.TestCase):
+    """Proprietary-mode rule modifiers."""
+
+    def run_checker(
+        self, changes: list, detections: dict, allowed: list = None, entities: list = None
+    ) -> tuple:
+        """Install the ScanCode mock and run the checker in proprietary mode."""
+        self.install_scancode_mock(detections)
+        checker = LicenseChecker(
+            make_patch_obj(changes),
+            allowed or PERMISSIVE,
+            mode="proprietary",
+            proprietary_entities=entities,
+        )
+        return checker.run()
+
+    def test_permissive_addition_is_a_notice_warning(self):
+        """A permissive OSS addition warns instead of blocking."""
+        flagged, warnings = self.run_checker(
+            [make_change("+MIT text\n", change_type="ADDED")], {"0_added.txt": "MIT"}
+        )
+        self.assertEqual(flagged, {})
+        self.assertIn("Permissive open-source license added: MIT", warnings["src/foo.c"][0])
+        self.assertIn("NOTICE", warnings["src/foo.c"][0])
+
+    def test_unchanged_permissive_license_does_not_warn(self):
+        """An unchanged license does not warn."""
+        flagged, warnings = self.run_checker(
+            [make_change("+MIT text\n-MIT text\n")],
+            {"0_added.txt": "MIT", "0_deleted.txt": "MIT"},
+        )
+        self.assertEqual(flagged, {})
+        self.assertEqual(warnings, {})
+
+    def test_removing_proprietary_marking_blocks_without_notice_warning(self):
+        """Proprietary removal blocks and suppresses the permissive-addition warning."""
+        flagged, warnings = self.run_checker(
+            [make_change("+MIT text\n-proprietary text\n")],
+            {"0_added.txt": "MIT", "0_deleted.txt": PROPRIETARY_LICENSE},
+        )
+        self.assertIn("Proprietary license statement removed", flagged["src/foo.c"][0])
+        self.assertEqual(warnings, {})
+
+    def test_removing_proprietary_marker_from_compound_expression_blocks(self):
+        """Removing the marker from one component of a compound expression still blocks."""
+        flagged, _warnings = self.run_checker(
+            [make_change("+MIT text\n-mixed text\n")],
+            {"0_added.txt": "MIT", "0_deleted.txt": f"{PROPRIETARY_LICENSE} AND GPL-2.0-only"},
+        )
+        self.assertIn("Proprietary license statement removed", flagged["src/foo.c"][0])
+
+    def test_permissive_added_while_proprietary_retained_warns(self):
+        """A retained proprietary marker is ignored for permissiveness checks."""
+        flagged, warnings = self.run_checker(
+            [make_change("+MIT text\n-proprietary text\n")],
+            {"0_added.txt": f"MIT AND {PROPRIETARY_LICENSE}", "0_deleted.txt": PROPRIETARY_LICENSE},
+        )
+        self.assertEqual(flagged, {})
+        self.assertIn("Permissive open-source license added", warnings["src/foo.c"][0])
+
+    def test_copyleft_added_while_proprietary_retained_still_blocks(self):
+        """Excluding the retained marker does not excuse a copyleft addition."""
+        flagged, warnings = self.run_checker(
+            [make_change("+GPL text\n-proprietary text\n")],
+            {
+                "0_added.txt": f"GPL-2.0-only AND {PROPRIETARY_LICENSE}",
+                "0_deleted.txt": PROPRIETARY_LICENSE,
+            },
+        )
+        self.assertIn("src/foo.c", flagged)
+        self.assertEqual(warnings, {})
+
+    def test_solitary_proprietary_license_is_silent(self):
+        """A solitary proprietary-license detection raises no issue in proprietary mode."""
+        flagged, warnings = self.run_checker(
+            [make_change("+proprietary header\n", change_type="ADDED")],
+            {"0_added.txt": PROPRIETARY_LICENSE},
+        )
+        self.assertEqual(flagged, {})
+        self.assertEqual(warnings, {})
+
+    def test_permissive_swapped_for_proprietary_blocks_with_distinct_message(self):
+        """Deleting a real license and adding a proprietary marker is still relicensing."""
+        flagged, warnings = self.run_checker(
+            [make_change("+proprietary text\n-MIT text\n")],
+            {"0_added.txt": PROPRIETARY_LICENSE, "0_deleted.txt": "MIT"},
+        )
+        self.assertIn("attribution terms are not extinguished", flagged["src/foo.c"][0])
+        self.assertEqual(warnings, {})
+
+    def test_marker_stripped_from_compound_deleted_expression_blocks(self):
+        """Keeping only the proprietary marker still reports the deleted real license."""
+        flagged, _warnings = self.run_checker(
+            [make_change("+proprietary text\n-mixed text\n")],
+            {"0_added.txt": PROPRIETARY_LICENSE, "0_deleted.txt": f"MIT AND {PROPRIETARY_LICENSE}"},
+        )
+        self.assertIn("attribution terms are not extinguished", flagged["src/foo.c"][0])
+
+    def test_proprietary_marking_on_both_sides_is_silent(self):
+        """Reformatting a proprietary marker is not a license change."""
+        flagged, warnings = self.run_checker(
+            [make_change("+proprietary text\n-proprietary text\n")],
+            {"0_added.txt": PROPRIETARY_LICENSE, "0_deleted.txt": PROPRIETARY_LICENSE},
+        )
+        self.assertEqual(flagged, {})
+        self.assertEqual(warnings, {})
+
+    def test_new_file_with_internal_copyright_and_no_license_is_not_blocked(self):
+        """A recognized internal copyright satisfies the proprietary new-file rule."""
+        content = "+Copyright (c) 2024 Qualcomm Technologies, Inc.\n+int main(void) {}\n"
+        flagged, warnings = self.run_checker(
+            [make_change(content, change_type="ADDED")], {"0_added.txt": None}
+        )
+        self.assertEqual(flagged, {})
+        self.assertEqual(warnings, {})
+
+    def test_new_file_with_custom_entity_and_no_license_is_not_blocked(self):
+        """A configured custom entity is honored."""
+        content = "+Copyright (c) 2024 Acme Robotics\n+int main(void) {}\n"
+        flagged, _warnings = self.run_checker(
+            [make_change(content, change_type="ADDED")],
+            {"0_added.txt": None},
+            entities=["Acme Robotics"],
+        )
+        self.assertEqual(flagged, {})
+
+    def test_new_file_with_no_copyright_and_no_license_blocks_distinctly(self):
+        """A file with neither license nor internal copyright still blocks."""
+        flagged, _warnings = self.run_checker(
+            [make_change("+int main(void) {}\n", change_type="ADDED")], {"0_added.txt": None}
+        )
+        message = flagged["src/foo.c"][0]
+        self.assertIn("scan team/legal", message)
+        self.assertNotEqual(message, "No license added for source file: src/foo.c")
 
 
 if __name__ == "__main__":
