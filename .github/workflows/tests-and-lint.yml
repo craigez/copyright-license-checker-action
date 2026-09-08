@@ -16,6 +16,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          # The tox license environment compares HEAD with its parent.
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Set up Python
