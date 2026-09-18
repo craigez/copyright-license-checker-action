@@ -4,6 +4,7 @@ Module to represent and process patch files.
 
 import re
 
+from scanner.file_types import EXCLUDED_EXTENSIONS
 from scanner.ignore_config import IgnoreConfig
 
 
@@ -41,7 +42,10 @@ class Patch:
             elif change_type and change_type.group(1) == "deleted":
                 change_type = "DELETED"
             elif re.search("rename from .*\nrename to .*", file_change, re.MULTILINE):
-                change_type = "RENAMED"
+                # A pure rename has no hunks. A rename with content changes
+                # must receive the same downstream checks as a modification.
+                has_content_hunks = re.search(r"^@@ ", file_change, re.MULTILINE)
+                change_type = "RENAMED_MODIFIED" if has_content_hunks else "RENAMED"
             else:
                 change_type = "MODIFIED"
 
@@ -52,7 +56,7 @@ class Patch:
             file_type = "binary" if "GIT binary patch" in file_change else "source"
 
             # Skip files that match hardcoded exclusions or config-based exclusions
-            if path_name.endswith((".patch", ".bb", ".md", ".json", ".yml")):
+            if path_name.endswith(EXCLUDED_EXTENSIONS):
                 continue
 
             if self.ignore_config.is_excluded(path_name):
