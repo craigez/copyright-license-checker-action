@@ -6,7 +6,7 @@ import json
 import subprocess
 import tempfile
 from scanner import config
-from scanner.copyright_checker import CopyrightChecker
+from scanner.copyright_checker import CopyrightChecker, DEFAULT_INTERNAL_ENTITIES
 from scanner.license_scancode import LicenseChecker
 from scanner.licenses import (
     COPYLEFT_LICENSES,
@@ -227,24 +227,95 @@ def beautify_output(
     print("\n".join(output))
 
 
+def _escape_workflow_command(value: str, is_property: bool = False) -> str:
+    """Escape a value for a GitHub Actions workflow command."""
+    escaped = value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    if is_property:
+        escaped = escaped.replace(":", "%3A").replace(",", "%2C")
+    return escaped
+
+
+def emit_workflow_annotations(flagged_files: dict, warning_files: dict) -> None:
+    """
+    Emit GitHub Actions annotations for every reported issue.
+
+    Args:
+        flagged_files: Files with blocking license or copyright issues.
+        warning_files: Files with non-blocking license issues.
+    """
+    for level, files in (("error", flagged_files), ("warning", warning_files)):
+        for file_path, issues in files.items():
+            escaped_path = _escape_workflow_command(file_path, is_property=True)
+            for issue_type in ("license_issues", "copyright_issues"):
+                for issue in issues[issue_type]:
+                    escaped_issue = _escape_workflow_command(issue)
+                    print(f"::{level} file={escaped_path}::{escaped_issue}")
+
+
 def parse_args(argv: list) -> argparse.Namespace:
-    """Parse the patch path and repository name from command-line arguments."""
+    """
+    Parse command-line arguments.
+
+    Args:
+        argv: Argument list, excluding the program name (i.e. sys.argv[1:]).
+
+    Returns:
+        Parsed arguments with patch_file, repo_name, mode, and
+        proprietary_entities attributes.
+
+    Raises:
+        SystemExit: If mode is not one of "opensource"/"proprietary", or
+            required positional arguments are missing.
+    """
     parser = argparse.ArgumentParser(description="Copyright and license compliance checker.")
     parser.add_argument("patch_file", help="Path to the patch file to check.")
     parser.add_argument("repo_name", help="The name of the GitHub repository.")
+    parser.add_argument(
+        "--mode",
+        choices=("opensource", "proprietary"),
+        default="opensource",
+        help="Compliance mode (default: opensource).",
+    )
+    parser.add_argument(
+        "--proprietary-entities",
+        default="",
+        help=(
+            "Comma-separated copyright-holder strings, in addition to the "
+            "built-in defaults, treated as internal authorship in proprietary mode."
+        ),
+    )
     return parser.parse_args(argv)
 
 
-def resolve_allowed_licenses(repo_name: str) -> tuple:
+def resolve_internal_entities(proprietary_entities: str) -> list:
+    """
+    Resolve the internal-entity list from a comma-separated argument.
+
+    Args:
+        proprietary_entities: Comma-separated extra entity strings, or "".
+
+    Returns:
+        DEFAULT_INTERNAL_ENTITIES extended with any user-supplied entries.
+        Blank entries are dropped.
+    """
+    extra = [entity.strip() for entity in proprietary_entities.split(",") if entity.strip()]
+    return DEFAULT_INTERNAL_ENTITIES + extra
+
+
+def resolve_allowed_licenses(mode: str, repo_name: str) -> tuple:
     """
     Resolve the repository license and allowed-license baseline.
 
     Args:
+        mode (str): "opensource" or "proprietary".
         repo_name (str): The name of the repository.
 
     Returns:
         tuple: (repo_license, allowed_licenses).
     """
+    if mode == "proprietary":
+        return "proprietary", PERMISSIVE_LICENSES
+
     repo_license = get_license(repo_name)
     if repo_license in PERMISSIVE_LICENSES:
         return repo_license, PERMISSIVE_LICENSES
@@ -300,9 +371,15 @@ def main() -> None:
     args = parse_args(sys.argv[1:])
     patch = Patch(args.patch_file)
     repo_name = args.repo_name
-    repo_license, allowed_licenses = resolve_allowed_licenses(repo_name)
+    internal_entities = resolve_internal_entities(args.proprietary_entities)
+    repo_license, allowed_licenses = resolve_allowed_licenses(args.mode, repo_name)
 
-    license_checker = LicenseChecker(patch, allowed_licenses)
+    license_checker = LicenseChecker(
+        patch,
+        allowed_licenses,
+        mode=args.mode,
+        proprietary_entities=internal_entities,
+    )
     copyright_checker = CopyrightChecker(patch)
 
     flagged_license_files, warning_license_files = license_checker.run()
@@ -312,6 +389,8 @@ def main() -> None:
     )
 
     beautify_output(flagged_files, warning_files, repo_license, LOG_PREFIX)
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        emit_workflow_annotations(flagged_files, warning_files)
 
     sys.exit(1 if flagged_files else 0)
 
