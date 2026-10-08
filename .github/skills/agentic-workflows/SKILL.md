@@ -14,7 +14,7 @@ Repository overlay (optional):
 - Precedence: repository overlay instructions override upstream defaults when they conflict.
 
 Read only the files you need:
-Load these files from `github/gh-aw` (they are not available locally).
+Load these files from `github/gh-aw` (they are not available locally). Resolve each relative path below by prefixing it with `https://raw.githubusercontent.com/github/gh-aw/main/` (for example, `.github/aw/designer.md` resolves to `https://raw.githubusercontent.com/github/gh-aw/main/.github/aw/designer.md`).
 - `.github/aw/action-container-substitutions.md`
 - `.github/aw/agent-runtime-instructions.md`
 - `.github/aw/agentic-chat.md`
