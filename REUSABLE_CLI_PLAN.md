@@ -62,7 +62,7 @@ Behavior:
 - GitHub annotations remain an environment-specific enhancement and do not
   affect normal local output.
 
-Exit codes will be an explicit compatibility contract:
+Exit codes for the new installed command will be an explicit contract:
 
 | Code | Meaning |
 | ---: | --- |
@@ -71,9 +71,54 @@ Exit codes will be an explicit compatibility contract:
 | `2` | Invalid arguments or invalid user-supplied paths/configuration |
 | `3` | Checker execution failed, for example because ScanCode could not run |
 
+The legacy `python main.py` entry point will retain its current exit behavior
+while it exists. In particular, operational failures that historically exited
+nonzero through an uncaught exception must not silently change to exit code `3`
+for legacy callers. The compatibility wrapper may translate the new internal
+result back to the legacy behavior while the installed command uses the new
+contract.
+
 The first release will continue to require a pre-generated patch. Generating a
 Git diff, scanning an entire repository, JSON/SARIF output, plugin APIs, and a
 stable Python API are outside this migration's scope.
+
+## Backward Compatibility and PR Boundaries
+
+The first five implementation groups can be landed without breaking existing
+GitHub Action users or scripts that invoke `python main.py`.
+
+Compatibility requires the following guarantees throughout the migration:
+
+- Keep the root `main.py` entry point and its existing positional arguments,
+  defaults, output, and exit behavior.
+- Keep a top-level `scanner` compatibility package that re-exports or delegates
+  to the namespaced implementation while any existing imports may remain.
+- Make `--repo-root`, `--version`, and an optional `REPO_NAME` additive. The
+  absence of `--repo-root` must preserve current-directory lookup behavior.
+- Resolve relative patch paths from the caller's current directory, matching
+  the existing script.
+- Preserve all GitHub Action inputs, defaults, annotations, compliance
+  decisions, and success/failure outcomes when changing its internal command.
+- Apply the new exit code `3` only to the new installed command. Do not change
+  the legacy script's observable exit behavior during the compatibility period.
+
+The backward-compatible PR sequence is:
+
+1. Characterization and subprocess-level CLI tests.
+2. Namespaced package refactor with `main.py` and `scanner` compatibility
+   wrappers.
+3. Installable packaging and the new console-script entry point.
+4. GitHub Action migration to the installed command with behavior parity.
+5. Standalone CLI and generic CI documentation.
+
+The first three PRs can be opened immediately as a stacked series. The Action
+migration depends on the installed command from PR 3. Documentation should be
+finalized after the command syntax and packaging interface are settled.
+
+Removing the wrappers is the only inherently breaking part of this plan. It is
+not required to complete the reusable CLI and can be deferred indefinitely. If
+it is eventually done, it should be released as a deliberate major-version
+change rather than bundled with the initial CLI work.
 
 ## Target Layout
 
@@ -141,9 +186,10 @@ test(cli): define reusable command behavior
   those classes inspect the process working directory.
 - Use `pathlib.Path` for user-supplied paths and validate them before scanning.
 - Introduce specific operational exceptions so CLI failures can map to exit
-  code `3` without exposing a traceback during normal use.
-- Keep compatibility behavior in a temporary root `main.py` wrapper until the
-  Action is migrated.
+  code `3` without exposing a traceback during normal use. Preserve legacy exit
+  behavior in the root wrapper.
+- Keep compatibility behavior in the root `main.py` wrapper and a top-level
+  `scanner` shim. Their removal is not part of the initial CLI release.
 
 Suggested commit:
 
@@ -204,13 +250,15 @@ Suggested commit:
 docs(cli): document installation and standalone usage
 ```
 
-### 6. Remove compatibility scaffolding
+### 6. Future major release: remove compatibility scaffolding
 
-- Remove the root `main.py` wrapper after the Action, tests, and documentation
-  use the installed command.
+- Do not include this group in the initial reusable CLI migration.
+- Remove the root `main.py` wrapper only after a deliberate decision to end
+  compatibility with direct script users.
 - Remove the old top-level `scanner` package and obsolete import-path setup.
 - Confirm the source distribution, wheel, Action, and direct command all run
   the same implementation.
+- Announce the removals and release them as a major-version change.
 
 Suggested commit:
 
