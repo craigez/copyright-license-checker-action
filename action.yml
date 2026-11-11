@@ -36,20 +36,20 @@ runs:
       # packaging/platform mismatch fails fast instead of starting a C build.
       run: |
         python -m pip install --upgrade pip
-        pip install --only-binary=lxml -r "$ACTION_PATH/requirements.txt"
+        python -m pip install --only-binary=lxml "$ACTION_PATH"
       shell: bash
 
     - name: Run checker
       env:
-        ACTION_PATH: ${{ github.action_path }}
         PATCH_FILE: ${{ inputs.patch_file }}
         REPO_NAME: ${{ inputs.repo_name }}
         MODE: ${{ inputs.mode }}
         PROPRIETARY_ENTITIES: ${{ inputs.proprietary_entities }}
       run: |
-        python "$ACTION_PATH/main.py" \
+        copyright-license-checker \
           "$PATCH_FILE" \
           "$REPO_NAME" \
+          --repo-root "$GITHUB_WORKSPACE" \
           --mode "$MODE" \
           --proprietary-entities "$PROPRIETARY_ENTITIES"
       shell: bash
