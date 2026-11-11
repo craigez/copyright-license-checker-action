@@ -10,7 +10,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import config
+from . import __version__, config
 from .copyright_checker import CopyrightChecker, DEFAULT_INTERNAL_ENTITIES
 from .exceptions import CheckerExecutionError
 from .license_scancode import LicenseChecker
@@ -325,7 +325,11 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="",
         help="Comma-separated additional internal copyright-holder strings.",
     )
-    parser.add_argument("--version", action="version", version="copyright-license-checker 0.0.0")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"copyright-license-checker {__version__}",
+    )
     return parser.parse_args(argv)
 
 
